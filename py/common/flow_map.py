@@ -38,10 +38,19 @@ class FlowMap(nn.Module):
         calc_weight: bool = False,
         return_X_and_phi: bool = False,
         init_weights: bool = False,
+        return_div: bool = False,
     ) -> jnp.ndarray:
         """Apply the flow map."""
         return self.flow_map(
-            s, t, x, label, train, calc_weight, return_X_and_phi, init_weights
+            s,
+            t,
+            x,
+            label,
+            train,
+            calc_weight,
+            return_X_and_phi,
+            init_weights,
+            return_div,
         )
 
     def partial_t(
@@ -92,10 +101,17 @@ class FlowMap(nn.Module):
         label: float = None,
         train: bool = True,
         calc_weight: bool = False,
+        return_div: bool = False,
     ) -> jnp.ndarray:
         """Compute the flow map."""
         return self.flow_map.calc_phi(
-            s, t, x, label=label, train=train, calc_weight=calc_weight
+            s,
+            t,
+            x,
+            label=label,
+            train=train,
+            calc_weight=calc_weight,
+            return_div=return_div,
         )
 
     def calc_b(
@@ -105,10 +121,16 @@ class FlowMap(nn.Module):
         label: float = None,
         train: bool = True,
         calc_weight: bool = False,
+        return_div: bool = False,
     ) -> jnp.ndarray:
         """Apply the flow map."""
         return self.flow_map.calc_b(
-            t, x, label=label, train=train, calc_weight=calc_weight
+            t,
+            x,
+            label=label,
+            train=train,
+            calc_weight=calc_weight,
+            return_div=return_div,
         )
 
 

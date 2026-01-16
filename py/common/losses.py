@@ -33,6 +33,30 @@ def mean_reduce(func):
     return wrapper
 
 
+def _hutchinson_divergence(
+    params: Parameters,
+    s: float,
+    t: float,
+    x: jnp.ndarray,
+    label: jnp.ndarray,
+    rng: jnp.ndarray,
+    *,
+    X: flow_map.FlowMap,
+) -> jnp.ndarray:
+    """Estimate div(phi) with Hutchinson's estimator at a single (s,t,x)."""
+    eps_key = rng["dropout"]
+    eps = jax.random.normal(eps_key, shape=x.shape)
+
+    def phi_dot(x_in):
+        phi = X.apply(
+            params, s, t, x_in, label, train=False, method="calc_phi", rngs=rng
+        )
+        return jnp.sum(phi * eps)
+
+    grad_x = jax.grad(phi_dot)(x)
+    return jnp.sum(grad_x * eps)
+
+
 def diagonal_term(
     params: Parameters,
     x0: jnp.ndarray,
@@ -51,8 +75,19 @@ def diagonal_term(
     It_dot = interp.calc_It_dot(t, x0, x1)
 
     # compute the weighted loss
-    bt = X.apply(params, t, It, label, train=True, method="calc_b", rngs=rng)
+    bt_rslt = X.apply(
+        params, t, It, label, train=True, method="calc_b", rngs=rng, return_div=True
+    )
+    if isinstance(bt_rslt, tuple):
+        bt, div_tt = bt_rslt
+    else:
+        bt = bt_rslt
+        div_tt = None
     velocity_loss = jnp.sum((bt - It_dot) ** 2)
+    if div_tt is not None:
+        # div_hat = _hutchinson_divergence(params, t, t, It, label, rng, X=X)
+        # velocity_loss = velocity_loss + jnp.sum((div_tt - div_hat) ** 2)
+        pass
 
     # Diagonal uses s=t
     weight_tt = X.apply(params, t, t, method="calc_weight")
@@ -80,13 +115,21 @@ def psd_term(
     Is = interp.calc_It(s, x0, x1)
 
     # compute the full jump
-    X_st, phi_st = X.apply(
-        params, s, t, Is, label, train=False, rngs=rng, return_X_and_phi=True
+    X_st, phi_st, div_st = X.apply(
+        params,
+        s,
+        t,
+        Is,
+        label,
+        train=False,
+        rngs=rng,
+        return_X_and_phi=True,
+        return_div=True,
     )
 
     # break it down into two jumps
     if stopgrad_type == "convex":
-        X_su, phi_su = jax.lax.stop_gradient(
+        X_su, phi_su, div_su = jax.lax.stop_gradient(
             X.apply(
                 teacher_params,
                 s,
@@ -96,10 +139,11 @@ def psd_term(
                 train=False,
                 rngs=rng,
                 return_X_and_phi=True,
+                return_div=True,
             )
         )
 
-        X_ut, phi_ut = jax.lax.stop_gradient(
+        X_ut, phi_ut, div_ut = jax.lax.stop_gradient(
             X.apply(
                 teacher_params,
                 u,
@@ -109,10 +153,11 @@ def psd_term(
                 train=False,
                 rngs=rng,
                 return_X_and_phi=True,
+                return_div=True,
             )
         )
     elif stopgrad_type == "none":
-        X_su, phi_su = X.apply(
+        X_su, phi_su, div_su = X.apply(
             params,
             s,
             u,
@@ -121,9 +166,10 @@ def psd_term(
             train=False,
             rngs=rng,
             return_X_and_phi=True,
+            return_div=True,
         )
 
-        X_ut, phi_ut = X.apply(
+        X_ut, phi_ut, div_ut = X.apply(
             params,
             u,
             t,
@@ -132,6 +178,7 @@ def psd_term(
             train=False,
             rngs=rng,
             return_X_and_phi=True,
+            return_div=True,
         )
     else:
         raise ValueError(f"Invalid stopgrad_type: {stopgrad_type}")
@@ -139,13 +186,18 @@ def psd_term(
     if psd_type == "uniform":
         student = phi_st
         teacher = (1 - h) * phi_su + h * phi_ut
+        div_teacher = (1 - h) * div_su + h * div_ut
     elif psd_type == "midpoint":
         student = phi_st
         teacher = 0.5 * (phi_su + phi_ut)
+        div_teacher = 0.5 * (div_su + div_ut)
     else:
         raise ValueError(f"Invalid psd_type: {psd_type}")
 
     psd_loss = jnp.sum((student - teacher) ** 2)
+    if div_st is not None:
+        # psd_loss = psd_loss + jnp.sum((div_st - div_teacher) ** 2)
+        pass
 
     weight_st = X.apply(params, s, t, method="calc_weight")
     return jnp.exp(-weight_st) * psd_loss + weight_st

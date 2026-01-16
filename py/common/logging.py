@@ -8,7 +8,7 @@ Code for basic wandb visualization and logging.
 import functools
 import signal
 import sys
-from typing import Dict, Tuple
+from typing import Callable, Dict, Tuple
 
 import jax
 import jax.numpy as jnp
@@ -346,6 +346,9 @@ def log_metrics(
     if (dist_utils.safe_index(cfg, train_state.step) % cfg.logging.visual_freq) == 0:
         if cfg.problem.target == "checker":
             prng_key = make_lowd_plot(cfg, statics, train_state, prng_key)
+            prng_key = make_likelihood_heatmap_plot(
+                cfg, statics, train_state, prng_key
+            )
         else:
             prng_key = make_image_plot(cfg, statics, train_state, prng_key)
 
@@ -407,10 +410,14 @@ def make_lowd_plot(
         constrained_layout=True,
     )
 
+    if cfg.problem.target == "checker":
+        xmin, xmax = -4.25, 4.25
+        ymin, ymax = -4.25, 4.25
+
     for ax in axs.ravel():
         if cfg.problem.target == "checker":
-            ax.set_xlim([-1.25, 1.25])
-            ax.set_ylim([-1.25, 1.25])
+            ax.set_xlim([xmin, xmax])
+            ax.set_ylim([ymin, ymax])
         ax.set_aspect("equal")
         ax.grid(which="both", axis="both", color="0.90", alpha=0.2)
         ax.tick_params(axis="both", labelsize=fontsize)
@@ -579,14 +586,25 @@ def make_loss_fn_args_plot(
         squeeze=False,
     )
 
+    if cfg.problem.target == "checker":
+        all_x = np.concatenate(
+            [np.asarray(x0batch), np.asarray(x1batch), np.asarray(xtbatch)],
+            axis=0,
+        )
+        margin = 0.5
+        xmin = float(all_x[:, 0].min()) - margin
+        xmax = float(all_x[:, 0].max()) + margin
+        ymin = float(all_x[:, 1].min()) - margin
+        ymax = float(all_x[:, 1].max()) + margin
+
     for kk, ax in enumerate(axs.ravel()):
         if kk == (len(titles) - 1):
             ax.set_xlim([-0.1, 1.1])
             ax.set_ylim([-0.1, 1.1])
         else:
             if cfg.problem.target == "checker":
-                ax.set_xlim([-1.25, 1.25])
-                ax.set_ylim([-1.25, 1.25])
+                ax.set_xlim([xmin, xmax])
+                ax.set_ylim([ymin, ymax])
 
         ax.set_aspect("equal")
         ax.grid(which="both", axis="both", color="0.90", alpha=0.2)
@@ -611,3 +629,178 @@ def make_loss_fn_args_plot(
             ax.scatter(sbatch, tbatch, s=0.1, alpha=0.5, marker="o")
 
     wandb.log({"loss_fn_args": wandb.Image(fig)})
+
+
+def _base_log_prob(cfg: config_dict.ConfigDict, x: jnp.ndarray) -> jnp.ndarray:
+    """Log prob of N(0, diag(rescale^2)) for base distribution."""
+    sigma = jnp.asarray(cfg.network.rescale)
+    if sigma.ndim == 0:
+        sigma = jnp.ones((x.shape[-1],)) * sigma
+    quad = jnp.sum((x / sigma) ** 2, axis=-1)
+    log_det = jnp.sum(jnp.log(sigma**2))
+    log_norm = 0.5 * (x.shape[-1] * jnp.log(2 * jnp.pi) + log_det)
+    return -0.5 * quad - log_norm
+
+
+def _sample_model_nsteps_with_logp(
+    apply_fn: Callable,
+    params: Dict,
+    x0: jnp.ndarray,
+    n_steps: int,
+    label: jnp.ndarray,
+    *,
+    cfg: config_dict.ConfigDict,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Sample with Euler steps and track logp using model divergence."""
+    dt = 1.0 / n_steps
+    t_curr = jnp.zeros((x0.shape[0],), dtype=jnp.float32)
+    x = x0
+    logp = _base_log_prob(cfg, x0)
+
+    for _ in range(n_steps):
+        t_next = t_curr + dt
+        phi, div = apply_fn(
+            params,
+            t_curr,
+            t_next,
+            x,
+            label,
+            train=False,
+            method="calc_phi",
+            return_div=True,
+        )
+        x = x + dt * phi
+        logp = logp - dt * div
+        t_curr = t_next
+
+    return np.asarray(x), np.asarray(logp)
+
+
+def _make_mean_logp_heatmap(xs, logp, xlim, ylim, bins=100):
+    """Mean logp per bin, matching try_ll.py."""
+    x = xs[:, 0]
+    y = xs[:, 1]
+    hist_sum, xedges, yedges = np.histogram2d(
+        x, y, bins=bins, range=[xlim, ylim], weights=logp
+    )
+    hist_count, _, _ = np.histogram2d(x, y, bins=bins, range=[xlim, ylim])
+    mean_logp = hist_sum / (hist_count + 1e-6)
+    mean_logp[hist_count == 0] = np.nan
+    extent = [xedges[0], xedges[-1], yedges[0], yedges[-1]]
+    return mean_logp, extent
+
+
+def _make_log_density_heatmap(xs, xlim, ylim, bins=100):
+    """Numerical log-density estimate from samples."""
+    x = xs[:, 0]
+    y = xs[:, 1]
+    hist_count, xedges, yedges = np.histogram2d(
+        x, y, bins=bins, range=[xlim, ylim]
+    )
+    bin_area = (
+        (xedges[-1] - xedges[0]) / bins * (yedges[-1] - yedges[0]) / bins
+    )
+    density = hist_count / (hist_count.sum() * bin_area + 1e-12)
+    logp = np.full_like(density, np.nan, dtype=np.float64)
+    mask = hist_count > 0
+    logp[mask] = np.log(density[mask])
+    extent = [xedges[0], xedges[-1], yedges[0], yedges[-1]]
+    return logp, extent
+
+
+def _clip_heatmaps(heatmaps):
+    """Replace NaNs and compute shared vmin/vmax."""
+    vals = []
+    for h in heatmaps:
+        finite = np.isfinite(h)
+        if finite.any():
+            vals.append(h[finite])
+    if not vals:
+        return heatmaps, 0.0, 1.0
+    all_vals = np.concatenate(vals)
+    vmin = all_vals.min()
+    vmax = all_vals.max()
+    clipped = []
+    for h in heatmaps:
+        h2 = h.copy()
+        h2[~np.isfinite(h2)] = vmin
+        clipped.append(np.clip(h2, vmin, vmax))
+    return clipped, vmin, vmax
+
+
+def make_likelihood_heatmap_plot(
+    cfg: config_dict.ConfigDict,
+    statics: state_utils.StaticArgs,
+    train_state: state_utils.EMATrainState,
+    prng_key: jnp.ndarray,
+) -> jnp.ndarray:
+    """Plot likelihood heatmaps for 1/2/4/8 steps and target checkerboard."""
+    params_for_visual = get_params_for_sampling(cfg, train_state, param_type="visual")
+    steps = [1, 2, 4, 8]
+    n_samples = cfg.logging.plot_bs
+
+    # Target samples for ground-truth heatmap
+    target_samples = next(statics.ds)[:n_samples]
+    margin = 0.5
+    xmin = float(target_samples[:, 0].min()) - margin
+    xmax = float(target_samples[:, 0].max()) + margin
+    ymin = float(target_samples[:, 1].min()) - margin
+    ymax = float(target_samples[:, 1].max()) + margin
+    xlim = (xmin, xmax)
+    ylim = (ymin, ymax)
+
+    h_target, extent = _make_log_density_heatmap(
+        np.asarray(target_samples), xlim, ylim, bins=100
+    )
+
+    # Model samples + logp for each step
+    prng_key, sample_key = jax.random.split(prng_key)
+    x0s = statics.sample_rho0(n_samples, sample_key)
+    labels = -jnp.ones((n_samples,))
+
+    heatmaps = [h_target]
+    titles = ["Target log p(x)"]
+    for step in steps:
+        xs, logp = _sample_model_nsteps_with_logp(
+            train_state.apply_fn,
+            params_for_visual,
+            x0s,
+            step,
+            labels,
+            cfg=cfg,
+        )
+        h_step, _ = _make_mean_logp_heatmap(xs, logp, xlim, ylim, bins=100)
+        heatmaps.append(h_step)
+        titles.append(f"Mean log p(x), {step} steps")
+
+    heatmaps, _, _ = _clip_heatmaps(heatmaps)
+    vmin, vmax = -4.4, -3.2
+    heatmaps = [np.clip(h, vmin, vmax) for h in heatmaps]
+
+    plt.close("all")
+    ncols = len(heatmaps)
+    fig, axs = plt.subplots(
+        nrows=1,
+        ncols=ncols,
+        figsize=(4 * ncols, 4),
+        sharex=True,
+        sharey=True,
+        constrained_layout=True,
+    )
+    if ncols == 1:
+        axs = [axs]
+    for ax, h, title in zip(axs, heatmaps, titles):
+        im = ax.imshow(
+            h.T,
+            origin="lower",
+            extent=extent,
+            aspect="equal",
+            vmin=vmin,
+            vmax=vmax,
+        )
+        ax.set_title(title, fontsize=10)
+        ax.grid(False)
+        fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+
+    wandb.log({"likelihood_heatmap": wandb.Image(fig)})
+    return prng_key

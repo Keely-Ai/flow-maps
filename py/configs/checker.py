@@ -10,10 +10,10 @@ import ml_collections
 
 # Define experiments matching the CelebA/CIFAR sweep
 experiments = [
-    ("lsd", None, "convex"),
+    # ("lsd", None, "convex"),
     ("psd", "uniform", "convex"),
     ("psd", "midpoint", "convex"),
-    ("esd", None, "full"),
+    # ("esd", None, "full"),
 ]
 
 
@@ -65,7 +65,7 @@ def get_config(
     )
     config.optimization.learning_rate = 1e-3  # Standard for checker
     config.optimization.clip = 10.0
-    config.optimization.total_steps = 250_000
+    config.optimization.total_steps = 125_000
     config.optimization.total_samples = (
         config.optimization.bs * config.optimization.total_steps
     )
@@ -75,8 +75,8 @@ def get_config(
     # logging config
     config.logging = ml_collections.ConfigDict()
     config.logging.plot_bs = 25_000
-    config.logging.visual_freq = 5_000
-    config.logging.save_freq = 10_000  # Save every 10k steps
+    config.logging.visual_freq = 5_00
+    config.logging.save_freq = 20_00  # Save every 10k steps
     config.logging.wandb_project = "self-distill-flow-maps"
 
     # Create systematic name for the experiment
@@ -101,12 +101,12 @@ def get_config(
     config.network.network_type = "mlp"
     config.network.n_hidden = 4  # 4 hidden layers
     config.network.n_neurons = 512  # 512 neurons per layer
-    config.network.output_dim = 2
+    config.network.output_dim = 3
     config.network.act = "gelu"
     config.network.use_residual = False
     config.network.use_weight = False
     config.network.use_bfloat16 = False
-    config.network.rescale = 0.5  # sigma_data
+    config.network.rescale = [1.0, 1.0]  # sigma_data (overwritten if adaptive)
 
     # Required but not used for MLP
     config.network.load_path = ""

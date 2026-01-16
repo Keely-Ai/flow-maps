@@ -106,32 +106,16 @@ def sample_checkerboard(
     n_samples: int, key: jnp.ndarray, *, n_squares: int
 ) -> np.ndarray:
     """
-    Samples the checkerboard dataset on [-1,1] x [-1,1]
-    with alternating squares removed.
+    Samples the checkerboard dataset using the RealNVP-style construction
+    used in try_ll.py.
     """
     del key
-    total_samples = 0
-    samples = np.array([]).reshape((0, 2))
-
-    while total_samples < n_samples:
-        # Generate uniform samples on unit square
-        curr_samples = np.random.rand(
-            n_samples * 2, 2
-        )  # Generate extra to account for filtering
-
-        # Determine which square each point falls into
-        x_idx = (curr_samples[:, 0] * n_squares).astype(int)
-        y_idx = (curr_samples[:, 1] * n_squares).astype(int)
-
-        # Keep points that fall in "white squares" of checkerboard
-        mask = (x_idx + y_idx) % 2 == 0
-        curr_samples = curr_samples[mask]
-
-        # Take only what we need
-        samples = np.concatenate((samples, curr_samples))
-        total_samples = samples.shape[0]
-
-    return 2 * samples[:n_samples] - 1
+    del n_squares
+    x1 = np.random.rand(n_samples) * 4.0 - 2.0
+    x2 = np.random.rand(n_samples) - (np.random.randint(0, 2, size=n_samples) * 2.0)
+    x2 = x2 + (np.floor(x1) % 2)
+    x = np.stack([x1, x2], axis=1)
+    return x * 2.0
 
 
 def setup_base(cfg: config_dict.ConfigDict, ex_input: jnp.ndarray) -> Callable:
@@ -140,9 +124,8 @@ def setup_base(cfg: config_dict.ConfigDict, ex_input: jnp.ndarray) -> Callable:
 
         @functools.partial(jax.jit, static_argnums=(0,))
         def sample_rho0(bs: int, key: jnp.ndarray):
-            return cfg.network.rescale * jax.random.normal(
-                key, shape=(bs, *ex_input.shape)
-            )
+            rescale = jnp.asarray(cfg.network.rescale)
+            return rescale * jax.random.normal(key, shape=(bs, *ex_input.shape))
 
     else:
         raise ValueError("Specified base density is not implemented.")
@@ -174,7 +157,7 @@ def setup_target(cfg: config_dict.ConfigDict, prng_key: jnp.ndarray):
         n_samples = cfg.problem.n
         key, prng_key = jax.random.split(prng_key)
         x1s = sample_rho1(n_samples, key)
-        rescale_value = float(np.std(x1s))
+        rescale_value = np.std(x1s, axis=0).tolist()
         ds = np_to_tfds(cfg, x1s)
 
     elif (

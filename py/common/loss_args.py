@@ -39,10 +39,10 @@ def _sample_triangle(
     tmax: float,
 ) -> Tuple[jnp.ndarray, jnp.ndarray]:
     """Sample uniformly from upper triangle."""
-    temp1 = jax.random.uniform(key1, shape=(bs,), minval=tmin, maxval=tmax)
-    temp2 = jax.random.uniform(key2, shape=(bs,), minval=tmin, maxval=tmax)
-    s = jnp.minimum(temp1, temp2)
-    t = jnp.maximum(temp1, temp2)
+    s = jax.random.uniform(key1, shape=(bs,), minval=tmin, maxval=tmax)
+    t = jax.random.uniform(key2, shape=(bs,), minval=tmin, maxval=tmax)
+    # s = jnp.minimum(temp1, temp2)
+    # t = jnp.maximum(temp1, temp2)
     return s, t
 
 

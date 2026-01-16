@@ -63,7 +63,7 @@ class FlowMapMLP(nn.Module):
         )
 
     def calc_weight(self, s: float, t: float) -> float:
-        st = jnp.array([s, t])
+        st = jnp.stack([s, t], axis=-1)
         # return self.weight_mlp(st)
         return 1.0
 
@@ -76,19 +76,40 @@ class FlowMapMLP(nn.Module):
         train: bool = True,
         calc_weight: bool = False,
         init_weights: bool = False,
+        return_div: bool = False,
     ) -> jnp.ndarray:
         del label
         del train
         del init_weights  # MLP doesn't have dual weights to initialize
-        st = jnp.array([s, t])
-        inp = jnp.concatenate((st, x / self.config.rescale))
-        phi_st = self.config.rescale * self.phi_mlp(inp)
+        rescale = jnp.asarray(self.config.rescale)
+        if x.ndim == 1:
+            st = jnp.stack([s, t], axis=-1)
+            inp = jnp.concatenate((st, x / rescale), axis=-1)
+        else:
+            s_vec = jnp.broadcast_to(s, (x.shape[0],))
+            t_vec = jnp.broadcast_to(t, (x.shape[0],))
+            st = jnp.stack([s_vec, t_vec], axis=-1)
+            inp = jnp.concatenate((st, x / rescale), axis=-1)
+        raw_out = self.phi_mlp(inp)
+        div_st = None
+
+        if self.config.output_dim == 2:
+            phi_st = rescale * raw_out
+        elif self.config.output_dim == 3:
+            phi_st = rescale * raw_out[..., :2]
+            div_st = raw_out[..., 2]
+        else:
+            raise ValueError("FlowMapMLP expects output_dim of 2 or 3.")
 
         if calc_weight:
             weight = self.calc_weight(s, t)
+            if return_div and div_st is not None:
+                return phi_st, div_st, weight
             return phi_st, weight
-        else:
-            return phi_st
+
+        if return_div and div_st is not None:
+            return phi_st, div_st
+        return phi_st
 
     def calc_b(
         self,
@@ -97,8 +118,9 @@ class FlowMapMLP(nn.Module):
         label: float = None,
         train: bool = True,
         calc_weight: bool = False,
+        return_div: bool = False,
     ) -> jnp.ndarray:
-        return self.calc_phi(t, t, x, label, train, calc_weight)
+        return self.calc_phi(t, t, x, label, train, calc_weight, False, return_div)
 
     def __call__(
         self,
@@ -110,9 +132,10 @@ class FlowMapMLP(nn.Module):
         calc_weight=False,
         return_X_and_phi: bool = False,
         init_weights: bool = False,
+        return_div: bool = False,
     ) -> jnp.ndarray:
         del label
-        phi_st = self.calc_phi(
+        phi_rslt = self.calc_phi(
             s,
             t,
             x,
@@ -120,17 +143,35 @@ class FlowMapMLP(nn.Module):
             train=train,
             calc_weight=calc_weight,
             init_weights=init_weights,
+            return_div=return_div,
         )
+        div_st = None
+        weight = None
+
         if calc_weight:
-            phi_st, weight = phi_st
+            if return_div and self.config.output_dim == 3:
+                phi_st, div_st, weight = phi_rslt
+            else:
+                phi_st, weight = phi_rslt
+        else:
+            if return_div and self.config.output_dim == 3:
+                phi_st, div_st = phi_rslt
+            else:
+                phi_st = phi_rslt
 
         X_st = x + (t - s) * phi_st
 
         if calc_weight:
+            if return_div and div_st is not None:
+                return X_st, phi_st, div_st, weight
             return X_st, weight
         elif return_X_and_phi:
+            if return_div and div_st is not None:
+                return X_st, phi_st, div_st
             return X_st, phi_st
         else:
+            if return_div and div_st is not None:
+                return X_st, div_st
             return X_st
 
 
@@ -184,7 +225,9 @@ class EDM2FlowMap(nn.Module):
         train: bool = True,
         calc_weight: bool = False,
         init_weights: bool = False,
+        return_div: bool = False,
     ) -> jnp.ndarray:
+        del return_div
         s, t, x, label = self.process_inputs(s, t, x, label)
         rslt = self.net.calc_phi(s, t, x, label, train, calc_weight, init_weights)
         if calc_weight:
@@ -200,7 +243,9 @@ class EDM2FlowMap(nn.Module):
         label: float = None,
         train: bool = True,
         calc_weight: bool = False,
+        return_div: bool = False,
     ) -> jnp.ndarray:
+        del return_div
         _, t, x, label = self.process_inputs(t, t, x, label)
         rslt = self.net.calc_b(t, x, label, train, calc_weight)
         if calc_weight:
@@ -219,7 +264,9 @@ class EDM2FlowMap(nn.Module):
         calc_weight: bool = False,
         return_X_and_phi: bool = False,
         init_weights: bool = False,
+        return_div: bool = False,
     ):
+        del return_div
         s, t, x, label = self.process_inputs(s, t, x, label)
         rslt = self.net(
             s, t, x, label, train, calc_weight, return_X_and_phi, init_weights
