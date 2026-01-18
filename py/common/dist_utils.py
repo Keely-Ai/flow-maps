@@ -38,7 +38,11 @@ def safe_unreplicate(cfg: config_dict.ConfigDict, x: Any) -> jnp.ndarray:
 
 def replicate_batch(cfg: config_dict.ConfigDict, x: Any) -> jnp.ndarray:
     """Shard batch across local devices for data parallelism."""
-    if cfg.training.ndevices > 1 and x is not None:
+    if (
+        cfg.training.ndevices > 1
+        and x is not None
+        and not getattr(cfg.training, "batch_is_sharded", False)
+    ):
         x = x.reshape((cfg.training.ndevices, -1, *x.shape[1:]))
     return x
 

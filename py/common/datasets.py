@@ -13,6 +13,7 @@ import jax.numpy as jnp
 import numpy as np
 import tensorflow as tf
 import tensorflow_datasets as tfds
+from flax import jax_utils
 from ml_collections import config_dict
 
 
@@ -100,6 +101,35 @@ def get_image_dataset(cfg: config_dict.ConfigDict):
     )
 
     return ds
+
+
+def _shard_batch(cfg: config_dict.ConfigDict, batch):
+    """Shard a batch along the leading axis for multi-device training."""
+    if cfg.training.ndevices <= 1:
+        return batch
+
+    def _reshape(x):
+        if x is None:
+            return None
+        return x.reshape((cfg.training.ndevices, -1, *x.shape[1:]))
+
+    if isinstance(batch, dict):
+        return {key: _reshape(value) for key, value in batch.items()}
+    return _reshape(batch)
+
+
+def prefetch_to_device(
+    cfg: config_dict.ConfigDict, ds, buffer_size: int = 2
+):
+    """Prefetch dataset batches onto device(s)."""
+    if buffer_size <= 0:
+        return ds
+
+    def _iterator():
+        for batch in ds:
+            yield _shard_batch(cfg, batch)
+
+    return jax_utils.prefetch_to_device(_iterator(), buffer_size)
 
 
 def sample_checkerboard(

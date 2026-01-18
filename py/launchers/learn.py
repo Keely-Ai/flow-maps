@@ -18,6 +18,16 @@ sys.path.append(py_dir)
 # Suppress TensorFlow logging before any TF imports
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"  # 0=all, 1=INFO, 2=WARNING, 3=ERROR
 
+# Optional: enable PTX-only compilation when supported
+def _append_xla_flag(flag: str) -> None:
+    flags = os.environ.get("XLA_FLAGS", "")
+    if flag not in flags:
+        flags = f"{flags} {flag}".strip()
+        os.environ["XLA_FLAGS"] = flags
+
+if os.environ.get("ENABLE_XLA_PTX", "0") == "1":
+    _append_xla_flag("--xla_gpu_force_ptx_compilation")
+
 # Force TensorFlow to use CPU only for data loading - no GPU ops
 import tensorflow as tf
 
@@ -58,8 +68,11 @@ def train_loop(
 ) -> None:
     """Carry out the training loop."""
 
+    logging.register_signal_handlers(cfg, train_state)
+    log_freq = getattr(cfg.logging, "log_freq", 1)
+
     pbar = tqdm(range(cfg.optimization.total_steps))
-    for _ in pbar:
+    for step in pbar:
         # construct loss function arguments
         start_time = time.time()
         loss_fn_args, prng_key = statics.get_loss_fn_args(
@@ -76,21 +89,19 @@ def train_loop(
         train_state = statics.update_ema_params(train_state)
 
         # log to wandb
-        prng_key = logging.log_metrics(
-            cfg,
-            statics,
-            train_state,
-            grads,
-            loss_value,
-            loss_fn_args,
-            prng_key,
-            end_time - start_time,
-        )
+        if log_freq <= 1 or (step % log_freq) == 0:
+            prng_key = logging.log_metrics(
+                cfg,
+                statics,
+                train_state,
+                grads,
+                loss_value,
+                loss_fn_args,
+                prng_key,
+                end_time - start_time,
+            )
 
-        pbar.set_postfix(loss=loss_value)
-
-        # guard against sigterm/sigint
-        logging.register_signal_handlers(cfg, train_state)
+            pbar.set_postfix(loss=loss_value)
 
     # dump one final time
     logging.save_state(train_state, cfg)
@@ -128,6 +139,10 @@ def setup_state(cfg: config_dict.ConfigDict, prng_key: jnp.ndarray) -> Tuple[
     else:
         ex_input = ex_input[0]
     interp = interpolant.setup_interpolant(cfg)
+
+    # prefetch batches to device(s) after grabbing an example
+    cfg.training.batch_is_sharded = cfg.training.ndevices > 1
+    ds = datasets.prefetch_to_device(cfg, ds, buffer_size=2)
     cfg = config_dict.FrozenConfigDict(cfg)
 
     # define training state

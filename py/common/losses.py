@@ -220,10 +220,17 @@ def lsd_term(
     """Compute the LSD term of the loss."""
     Is = interp.calc_It(s, x0, x1)
 
+    def _primary_output(value):
+        if isinstance(value, tuple):
+            return value[0]
+        return value
+
     # Compute the distillation loss
     Xst_Is, dt_Xst = X.apply(
         params, s, t, Is, label, train=False, method="partial_t", rngs=rng
     )
+    Xst_Is = _primary_output(Xst_Is)
+    dt_Xst = _primary_output(dt_Xst)
 
     if stopgrad_type == "convex":
         Xst_Is = jax.lax.stop_gradient(Xst_Is)
@@ -250,6 +257,8 @@ def lsd_term(
         )
     else:
         raise ValueError(f"Invalid stopgrad_type: {stopgrad_type}")
+
+    b_eval = _primary_output(b_eval)
 
     weight_st = X.apply(params, s, t, method="calc_weight")
     error = b_eval - dt_Xst

@@ -134,6 +134,19 @@ def get_loss_fn_args_randomness(
         (cfg.optimization.bs, -1)
     )
     prng_key = jax.random.split(dropout_keys[0])[0]
+
+    if getattr(cfg.training, "batch_is_sharded", False):
+        def _shard_batch(x):
+            if x is None:
+                return None
+            return x.reshape((cfg.training.ndevices, -1, *x.shape[1:]))
+
+        x0batch = _shard_batch(x0batch)
+        sbatch = _shard_batch(sbatch)
+        tbatch = _shard_batch(tbatch)
+        ubatch = _shard_batch(ubatch)
+        hbatch = _shard_batch(hbatch)
+        dropout_keys = _shard_batch(dropout_keys)
     return (
         tbatch,
         sbatch,
@@ -169,12 +182,23 @@ def get_batch(
 
     elif cfg.training.class_dropout > 0:
         assert cfg.network.use_cfg  # class dropout doesn't make sense without cfg
-        mask = jax.random.bernoulli(
-            prng_key, cfg.training.class_dropout, shape=(cfg.optimization.bs,)
-        )
-        mask = mask > 0
-        label_batch = label_batch.at[mask].set(cfg.problem.num_classes)
-        prng_key = jax.random.split(prng_key)[0]
+        if getattr(cfg.training, "batch_is_sharded", False):
+            keys = jax.random.split(prng_key, cfg.training.ndevices)
+
+            def _apply_dropout(key, labels):
+                mask = jax.random.bernoulli(
+                    key, cfg.training.class_dropout, shape=labels.shape
+                )
+                return labels.at[mask].set(cfg.problem.num_classes)
+
+            label_batch = jax.vmap(_apply_dropout)(keys, label_batch)
+            prng_key = jax.random.split(keys[0])[0]
+        else:
+            mask = jax.random.bernoulli(
+                prng_key, cfg.training.class_dropout, shape=label_batch.shape
+            )
+            label_batch = label_batch.at[mask].set(cfg.problem.num_classes)
+            prng_key = jax.random.split(prng_key)[0]
 
     return x1batch, label_batch, prng_key
 

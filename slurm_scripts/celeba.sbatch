@@ -3,10 +3,11 @@
 #SBATCH --partition=general
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=32
+#SBATCH --cpus-per-task=64
 #SBATCH --time=02-00:00
 #SBATCH --gres=gpu:4
 #SBATCH --mem=128GB
+#SBATCH --exclude=babel-v9-28,babel-x5-24
 #SBATCH --output=/home/xinyueai/Experiments/flow-maps/log/celeba_%A_%a.out
 #SBATCH --error=/home/xinyueai/Experiments/flow-maps/log/celeba_%A_%a.err
 
@@ -14,17 +15,22 @@
 ## Configuration
 PY_DIR=/home/xinyueai/Experiments/flow-maps/py
 CONFIG_PATH="configs.celeba64"
-OUTPUT_DIR="/data/user_data/xinyueai/flow-maps"
+OUTPUT_FOLDER="/data/user_data/xinyueai/flow-maps/celeba-lsd"
 DATASET_LOCATION="/home/xinyueai/Experiments/data"
 
-# Single experiment: PSD midpoint
-SLURM_ID=2
-METHOD="PSD midpoint"
-PFMM_TYPE="midpoint"
+# Single experiment: LSD
+SLURM_ID=0
+METHOD="LSD"
+PFMM_TYPE="N/A"
 STOPGRAD="convex"
 
 # Print job info
 echo "=========================================="
+echo "SLURM_JOB_GPUS=$SLURM_JOB_GPUS"
+echo "SLURM_STEP_GPUS=$SLURM_STEP_GPUS"
+echo "CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"
+nvidia-smi -L
+
 echo "CelebA Loss Method Comparison Training"
 echo "SLURM Job ID: ${SLURM_JOB_ID}"
 echo "SLURM Array Task ID: ${SLURM_ARRAY_TASK_ID}"

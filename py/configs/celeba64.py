@@ -9,9 +9,9 @@ import os
 import ml_collections
 
 experiments = [
-    # ("lsd", None, "convex"),
+    ("lsd", None, "convex"),
     # ("psd", "uniform", "convex"),
-    ("psd", "midpoint", "convex"),
+    # ("psd", "midpoint", "convex"),
     # ("esd", None, "full"),
 ]
 
@@ -54,7 +54,7 @@ def get_config(
 
     # optimization config
     config.optimization = ml_collections.ConfigDict()
-    config.optimization.bs = 512
+    config.optimization.bs = 256
     config.optimization.diag_fraction = 0.75
     config.optimization.learning_rate = 1e-2  # Initial learning rate
     config.optimization.clip = 1.0
@@ -68,7 +68,7 @@ def get_config(
     # logging config
     config.logging = ml_collections.ConfigDict()
     config.logging.plot_bs = 25
-    config.logging.visual_freq = 5000
+    config.logging.visual_freq = 1000
     config.logging.save_freq = 5000  # Save every 5k steps
     config.logging.wandb_project = "self-distill-flow-maps"
 
@@ -81,7 +81,7 @@ def get_config(
     config.logging.output_name = config.logging.wandb_name
 
     # FID computation settings
-    config.logging.fid_freq = 10000  # Compute FID every 10k steps
+    config.logging.fid_freq = 5000  # Compute FID every 10k steps
     config.logging.fid_stats_path = f"{dataset_location}/celeb_a/celeba_stats.npz"
     config.logging.fid_n_samples = 10000
     config.logging.fid_batch_size = 256

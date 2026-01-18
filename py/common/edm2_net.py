@@ -434,7 +434,7 @@ class EDM2FlowMapUNet(nn.Module):
         if self.predict_divergence:
             # Scalar head for divergence prediction.
             self.scalar_dense0 = nn.Dense(32)
-            self.scalar_dense1 = nn.Dense(32)
+            self.scalar_dense1 = nn.Dense(8)
             self.scalar_dense2 = nn.Dense(1)
 
     def __call__(self, x, ss, ts, class_labels, train=False):
