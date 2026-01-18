@@ -204,8 +204,6 @@ def initialize_flow_map(
 
     prng_key = jax.random.split(prng_key)[0]
 
-    print(f"Number of parameters: {ravel_pytree(params)[0].size}")
-
     if network_config.network_type == "edm2":
         params = edm2_net.project_to_sphere(params)
 
