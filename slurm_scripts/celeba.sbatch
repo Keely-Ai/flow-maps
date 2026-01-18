@@ -1,52 +1,27 @@
 #!/bin/bash
-#SBATCH --job-name=celeba_loss_comp
-#SBATCH --account=kempner_albergo_lab
-#SBATCH --partition=kempner_h100
+#SBATCH --job-name=celeba
+#SBATCH --partition=general
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=1
-#SBATCH --time=02-00:00  # 48 hours for CelebA (larger images)
-#SBATCH --gres=gpu:4  # 4 H100s for training
-#SBATCH --mem=128GB  # More memory for CelebA
-#SBATCH --output=/n/holylabs/LABS/albergo_lab/Everyone/nmboffi/lmm/celeba/logs/loss_method_%A_%a.out
-#SBATCH --error=/n/holylabs/LABS/albergo_lab/Everyone/nmboffi/lmm/celeba/logs/loss_method_%A_%a.err
-#SBATCH --array=0-3  # 4 experiments: LSD convex, PSD uniform, PSD midpoint, ESD full
+#SBATCH --cpus-per-task=32
+#SBATCH --time=02-00:00
+#SBATCH --gres=gpu:4
+#SBATCH --mem=128GB
+#SBATCH --output=/home/xinyueai/Experiments/flow-maps/log/celeba_%A_%a.out
+#SBATCH --error=/home/xinyueai/Experiments/flow-maps/log/celeba_%A_%a.err
 
-## Create output directories if they don't exist
-mkdir -p /n/holylabs/LABS/albergo_lab/Everyone/nmboffi/lmm/celeba/logs
 
 ## Configuration
-PY_DIR=/n/home04/nboffi/flow-maps/py
+PY_DIR=/home/xinyueai/Experiments/flow-maps/py
 CONFIG_PATH="configs.celeba64"
-DATASET_LOCATION="/n/holylabs/LABS/albergo_lab/Everyone/nmboffi/datasets"
-OUTPUT_FOLDER="/n/holylabs/LABS/albergo_lab/Everyone/nmboffi/lmm/celeba"
+OUTPUT_DIR="/data/user_data/xinyueai/flow-maps"
+DATASET_LOCATION="/home/xinyueai/Experiments/data"
 
-# Map array task ID to experiment
-SLURM_ID=${SLURM_ARRAY_TASK_ID}
-
-# Get experiment details for logging
-case ${SLURM_ID} in
-    0)
-        METHOD="LSD"
-        PFMM_TYPE="N/A"
-        STOPGRAD="convex"
-        ;;
-    1)
-        METHOD="PSD uniform"
-        PFMM_TYPE="uniform"
-        STOPGRAD="convex"
-        ;;
-    2)
-        METHOD="PSD midpoint"
-        PFMM_TYPE="midpoint"
-        STOPGRAD="convex"
-        ;;
-    3)
-        METHOD="ESD (Eulerian)"
-        PFMM_TYPE="N/A"
-        STOPGRAD="full"
-        ;;
-esac
+# Single experiment: PSD midpoint
+SLURM_ID=2
+METHOD="PSD midpoint"
+PFMM_TYPE="midpoint"
+STOPGRAD="convex"
 
 # Print job info
 echo "=========================================="
@@ -64,14 +39,15 @@ echo "=========================================="
 
 # Load modules
 module purge
-module load gcc/12.2.0-fasrc01
 
 # Hook conda/mamba into the shell and activate env
 source "$(conda info --base)/etc/profile.d/conda.sh"
-conda activate jax_3_17_25
+conda activate flowmaps
 
 # Fix library path to prioritize conda environment libraries over system ones
 export LD_LIBRARY_PATH=$CONDA_PREFIX/lib:$LD_LIBRARY_PATH
+export WANDB_ENTITY=axy782-carnegie-mellon-university
+
 
 # Change to project directory
 cd $PY_DIR || exit
