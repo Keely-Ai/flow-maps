@@ -44,7 +44,7 @@ def _hutchinson_divergence(
     X: flow_map.FlowMap,
 ) -> jnp.ndarray:
     """Estimate div(phi) with Hutchinson's estimator at a single (s,t,x)."""
-    eps_key = rng["dropout"]
+    eps_key = rng["dropout"] if isinstance(rng, dict) else rng
     eps = jax.random.normal(eps_key, shape=x.shape)
 
     def phi_dot(x_in):
@@ -86,7 +86,7 @@ def diagonal_term(
     velocity_loss = jnp.sum((bt - It_dot) ** 2)
     if div_tt is not None:
         # div_hat = _hutchinson_divergence(params, t, t, It, label, rng, X=X)
-        # velocity_loss = velocity_loss + jnp.sum((div_tt - div_hat) ** 2)
+        # velocity_loss = velocity_loss + jnp.sum((div_tt - div_hat) ** 2) * 0.1
         pass
 
     # Diagonal uses s=t

@@ -227,14 +227,27 @@ class EDM2FlowMap(nn.Module):
         init_weights: bool = False,
         return_div: bool = False,
     ) -> jnp.ndarray:
-        del return_div
         s, t, x, label = self.process_inputs(s, t, x, label)
-        rslt = self.net.calc_phi(s, t, x, label, train, calc_weight, init_weights)
+        rslt = self.net.calc_phi(
+            s, t, x, label, train, calc_weight, init_weights, return_div
+        )
+        div_st = None
         if calc_weight:
-            Xst, logvar = rslt
-            return Xst[0], logvar[0]
+            if return_div and isinstance(rslt, tuple) and len(rslt) == 3:
+                phi_st, div_st, logvar = rslt
+            else:
+                phi_st, logvar = rslt
+            if return_div and div_st is not None:
+                return phi_st[0], div_st[0], logvar[0]
+            return phi_st[0], logvar[0]
         else:
-            return rslt[0]
+            if return_div and isinstance(rslt, tuple) and len(rslt) == 2:
+                phi_st, div_st = rslt
+            else:
+                phi_st = rslt
+            if return_div and div_st is not None:
+                return phi_st[0], div_st[0]
+            return phi_st[0]
 
     def calc_b(
         self,
@@ -245,14 +258,25 @@ class EDM2FlowMap(nn.Module):
         calc_weight: bool = False,
         return_div: bool = False,
     ) -> jnp.ndarray:
-        del return_div
         _, t, x, label = self.process_inputs(t, t, x, label)
-        rslt = self.net.calc_b(t, x, label, train, calc_weight)
+        rslt = self.net.calc_b(t, x, label, train, calc_weight, return_div)
+        div_st = None
         if calc_weight:
-            bt, logvar = rslt
+            if return_div and isinstance(rslt, tuple) and len(rslt) == 3:
+                bt, div_st, logvar = rslt
+            else:
+                bt, logvar = rslt
+            if return_div and div_st is not None:
+                return bt[0], div_st[0], logvar[0]
             return bt[0], logvar[0]
         else:
-            return rslt[0]
+            if return_div and isinstance(rslt, tuple) and len(rslt) == 2:
+                bt, div_st = rslt
+            else:
+                bt = rslt
+            if return_div and div_st is not None:
+                return bt[0], div_st[0]
+            return bt[0]
 
     def __call__(
         self,
@@ -266,20 +290,35 @@ class EDM2FlowMap(nn.Module):
         init_weights: bool = False,
         return_div: bool = False,
     ):
-        del return_div
         s, t, x, label = self.process_inputs(s, t, x, label)
         rslt = self.net(
-            s, t, x, label, train, calc_weight, return_X_and_phi, init_weights
+            s, t, x, label, train, calc_weight, return_X_and_phi, init_weights, return_div
         )
+        div_st = None
 
         if calc_weight:
-            Xst, logvar = rslt
+            if return_div and isinstance(rslt, tuple) and len(rslt) == 3:
+                Xst, div_st, logvar = rslt
+            else:
+                Xst, logvar = rslt
+            if return_div and div_st is not None:
+                return Xst[0], div_st[0], logvar[0]
             return Xst[0], logvar[0]
         elif return_X_and_phi:
-            Xst, phi_st = rslt
+            if return_div and isinstance(rslt, tuple) and len(rslt) == 3:
+                Xst, phi_st, div_st = rslt
+            else:
+                Xst, phi_st = rslt
+            if return_div and div_st is not None:
+                return Xst[0], phi_st[0], div_st[0]
             return Xst[0], phi_st[0]
         else:
-            Xst = rslt
+            if return_div and isinstance(rslt, tuple) and len(rslt) == 2:
+                Xst, div_st = rslt
+            else:
+                Xst = rslt
+            if return_div and div_st is not None:
+                return Xst[0], div_st[0]
             return Xst[0]
 
 

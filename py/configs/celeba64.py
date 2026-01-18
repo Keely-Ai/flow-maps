@@ -9,10 +9,10 @@ import os
 import ml_collections
 
 experiments = [
-    ("lsd", None, "convex"),
-    ("psd", "uniform", "convex"),
+    # ("lsd", None, "convex"),
+    # ("psd", "uniform", "convex"),
     ("psd", "midpoint", "convex"),
-    ("esd", None, "full"),
+    # ("esd", None, "full"),
 ]
 
 
@@ -110,6 +110,7 @@ def get_config(
         "channel_mult": [1, 2, 3, 4],
         "num_blocks": 3,
         "attn_resolutions": [16, 8],
+        "predict_divergence": True,
         "block_kwargs": {
             "dropout": 0.0,  # No dropout for CelebA
         },

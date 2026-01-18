@@ -316,6 +316,7 @@ class EDM2FlowMapUNet(nn.Module):
     label_balance: float = 0.5  # Balance between noise and class embedding
     concat_balance: float = 0.5  # Balance between skip connections and main path
     block_kwargs: dict = field(default_factory=dict)  # Arguments for Block
+    predict_divergence: bool = False  # Whether to output a scalar divergence head
 
     def setup(self):
         cblock = [self.model_channels * x for x in self.channel_mult]
@@ -430,6 +431,12 @@ class EDM2FlowMapUNet(nn.Module):
 
         self.out_conv = MPConv(cout, self.img_channels, kernel=(3, 3))
 
+        if self.predict_divergence:
+            # Scalar head for divergence prediction.
+            self.scalar_dense0 = nn.Dense(64)
+            self.scalar_dense1 = nn.Dense(16)
+            self.scalar_dense2 = nn.Dense(1)
+
     def __call__(self, x, ss, ts, class_labels, train=False):
         # process embeddings
         emb_s = self.emb_s_linear(self.emb_s_fourier(ss))
@@ -459,9 +466,21 @@ class EDM2FlowMapUNet(nn.Module):
                 x = mp_cat(x, skip, t=self.concat_balance)
             x = block(x, emb, train=train)
 
+        div = None
+        if self.predict_divergence:
+            flat = x.reshape((x.shape[0], -1))
+            div = self.scalar_dense0(flat)
+            div = nn.silu(div)
+            div = self.scalar_dense1(div)
+            div = nn.silu(div)
+            div = self.scalar_dense2(div)
+            div = jnp.squeeze(div, axis=-1)
+
         # final convolution
         x = self.out_conv(x, gain=self.out_gain)
 
+        if self.predict_divergence:
+            return x, div
         return x
 
 
@@ -529,6 +548,7 @@ class PrecondFlowMap(nn.Module):
         train: bool = False,
         calc_weight: bool = False,
         init_weights: bool = False,
+        return_div: bool = False,
     ) -> jnp.ndarray:
         dtype = jnp.bfloat16 if self.use_bfloat16 else jnp.float32
         ss, ts, xs = self.process_input(ss, ts, xs)
@@ -539,9 +559,15 @@ class PrecondFlowMap(nn.Module):
 
         # Run the model
         xs_in = (c_in * xs).astype(dtype)
-        phi_st = c_out * self.unet(xs_in, ss, ts, class_labels, train=train).astype(
-            jnp.float32
-        )
+        unet_out = self.unet(xs_in, ss, ts, class_labels, train=train)
+        div_st = None
+        if isinstance(unet_out, tuple):
+            phi_raw, div_raw = unet_out
+        else:
+            phi_raw, div_raw = unet_out, None
+        phi_st = c_out * phi_raw.astype(jnp.float32)
+        if div_raw is not None:
+            div_st = c_out * div_raw.astype(jnp.float32)
 
         if init_weights:
             # During initialization, ensure weight params are created
@@ -549,8 +575,12 @@ class PrecondFlowMap(nn.Module):
 
         if calc_weight:
             logvar = self.calc_weight(ss, ts)[0]
+            if return_div and div_st is not None:
+                return phi_st, div_st, logvar
             return phi_st, logvar
 
+        if return_div and div_st is not None:
+            return phi_st, div_st
         return phi_st
 
     def calc_b(
@@ -560,9 +590,16 @@ class PrecondFlowMap(nn.Module):
         class_labels: jnp.ndarray = None,
         train: bool = False,
         calc_weight: bool = False,
+        return_div: bool = False,
     ) -> jnp.ndarray:
         return self.calc_phi(
-            ts, ts, xs, class_labels=class_labels, train=train, calc_weight=calc_weight
+            ts,
+            ts,
+            xs,
+            class_labels=class_labels,
+            train=train,
+            calc_weight=calc_weight,
+            return_div=return_div,
         )
 
     def __call__(
@@ -575,8 +612,9 @@ class PrecondFlowMap(nn.Module):
         calc_weight: bool = False,
         return_X_and_phi: bool = False,
         init_weights: bool = False,
+        return_div: bool = False,
     ) -> jnp.ndarray:
-        phi_st = self.calc_phi(
+        phi_rslt = self.calc_phi(
             ss,
             ts,
             xs,
@@ -584,18 +622,34 @@ class PrecondFlowMap(nn.Module):
             train=train,
             calc_weight=calc_weight,
             init_weights=init_weights,
+            return_div=return_div,
         )
 
+        div_st = None
         if calc_weight:
-            phi_st, logvar = phi_st
+            if return_div and isinstance(phi_rslt, tuple) and len(phi_rslt) == 3:
+                phi_st, div_st, logvar = phi_rslt
+            else:
+                phi_st, logvar = phi_rslt
+        else:
+            if return_div and isinstance(phi_rslt, tuple) and len(phi_rslt) == 2:
+                phi_st, div_st = phi_rslt
+            else:
+                phi_st = phi_rslt
 
         Xst = xs + (ts - ss) * phi_st
 
         # estimate uncertainty if requested
         if calc_weight:
+            if return_div and div_st is not None:
+                return Xst, div_st, logvar
             return Xst, logvar
 
         if return_X_and_phi:
+            if return_div and div_st is not None:
+                return Xst, phi_st, div_st
             return Xst, phi_st
 
+        if return_div and div_st is not None:
+            return Xst, div_st
         return Xst
