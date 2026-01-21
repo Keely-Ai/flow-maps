@@ -44,6 +44,8 @@ def get_config(
     config.training.seed = 42
     config.training.ema_facs = [0.999, 0.9999]
     config.training.ndevices = jax.device_count()
+    config.training.diag_teacher_source = "external"
+    config.training.offdiag_teacher_source = "self"
 
     # problem config - Checker specific
     config.problem = ml_collections.ConfigDict()
@@ -109,19 +111,19 @@ def get_config(
     config.network.rescale = [1.0, 1.0]  # sigma_data (overwritten if adaptive)
 
     # Required but not used for MLP
-    config.network.load_path = ""
+    config.network.load_path = "/home/xinyueai/Experiments/flow-maps/check/checker_paper_lsd_6.pkl"
     config.network.input_dims = (2,)
     config.network.load_ema_fac = None
     config.network.img_resolution = None
     config.network.img_channels = None
     config.network.label_dim = None
     config.network.logvar_channels = None
-    config.network.reset_optimizer = True
+    config.network.reset_optimizer = False
     config.network.unet_kwargs = None
 
     # optional teacher checkpoint
     config.teacher = ml_collections.ConfigDict()
-    config.teacher.load_path = ""
+    config.teacher.load_path = "/home/xinyueai/Experiments/flow-maps/check/checker_paper_lsd_6.pkl"
     config.teacher.ema_fac = 0.999
 
     return config

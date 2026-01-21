@@ -236,13 +236,34 @@ def get_loss_fn_args(
     # grab next batch of samples and labels
     x1batch, label_batch, prng_key = get_batch(cfg, statics, prng_key)
 
-    # set up the teacher (use external teacher if provided)
-    teacher_params = statics.teacher_params
-    if teacher_params is None:
-        teacher_params = train_state.params
+    # set up teacher params
+    external_teacher = statics.teacher_params
+    if external_teacher is None:
+        external_teacher = train_state.params
     else:
-        teacher_params = jax.tree_util.tree_map(jax.lax.stop_gradient, teacher_params)
-        teacher_params = dist_utils.safe_replicate(cfg, teacher_params)
+        external_teacher = jax.tree_util.tree_map(
+            jax.lax.stop_gradient, external_teacher
+        )
+        external_teacher = dist_utils.safe_replicate(cfg, external_teacher)
+
+    self_teacher = train_state.params
+
+    def _select_teacher(source: str):
+        if source == "external":
+            return external_teacher
+        if source == "self":
+            return self_teacher
+        raise ValueError(f"Unknown teacher source: {source}")
+
+    diag_source = getattr(cfg.training, "diag_teacher_source", None)
+    offdiag_source = getattr(cfg.training, "offdiag_teacher_source", None)
+    if diag_source is None:
+        diag_source = "external" if statics.teacher_params is not None else "self"
+    if offdiag_source is None:
+        offdiag_source = diag_source
+
+    teacher_params_diag = _select_teacher(diag_source)
+    teacher_params_offdiag = _select_teacher(offdiag_source)
 
     # for training flow map
     loss_fn_args = (
@@ -256,6 +277,6 @@ def get_loss_fn_args(
         dropout_keys,
     )
     loss_fn_args = dist_utils.replicate_loss_fn_args(cfg, loss_fn_args)
-    loss_fn_args = (teacher_params, *loss_fn_args)
+    loss_fn_args = (teacher_params_diag, teacher_params_offdiag, *loss_fn_args)
 
     return loss_fn_args, prng_key

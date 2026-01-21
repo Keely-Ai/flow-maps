@@ -721,6 +721,32 @@ def _make_uniform_logp_heatmap(xs, xlim, ylim, bins=100, logp_value=-np.log(32.0
     return logp, extent
 
 
+def _make_checker_logp_heatmap(
+    xlim, ylim, bins=100, logp_value=-np.log(32.0)
+):
+    """Analytical logp heatmap for the checkerboard target."""
+    xedges = np.linspace(xlim[0], xlim[1], bins + 1)
+    yedges = np.linspace(ylim[0], ylim[1], bins + 1)
+    xcenters = 0.5 * (xedges[:-1] + xedges[1:])
+    ycenters = 0.5 * (yedges[:-1] + yedges[1:])
+    Xc, Yc = np.meshgrid(xcenters, ycenters, indexing="ij")
+
+    u = Xc / 2.0
+    v = Yc / 2.0
+    in_range = (u >= -2.0) & (u < 2.0) & (v >= -2.0) & (v < 2.0)
+    parity = np.mod(np.floor(u), 2.0)
+    v_shift = v - parity
+    in_band = ((v_shift >= 0.0) & (v_shift < 1.0)) | (
+        (v_shift >= -2.0) & (v_shift < -1.0)
+    )
+    support = in_range & in_band
+
+    logp = np.full_like(Xc, np.nan, dtype=np.float64)
+    logp[support] = logp_value
+    extent = [xedges[0], xedges[-1], yedges[0], yedges[-1]]
+    return logp, extent
+
+
 def _make_grid_points(xlim, ylim, grid_size=200):
     xs = jnp.linspace(xlim[0], xlim[1], grid_size)
     ys = jnp.linspace(ylim[0], ylim[1], grid_size)
@@ -755,6 +781,11 @@ def _inverse_logp_points_with_divhead(
             train=False,
             method="calc_phi",
             return_div=True,
+        )
+        print(
+            "t_curr:", np.asarray(t_curr),
+            "t_next:", np.asarray(t_next),
+            "div:", np.asarray(div.mean()),
         )
         delta_logp = delta_logp - dt * div
         x = x + dt * phi
@@ -795,19 +826,13 @@ def make_likelihood_heatmap_plot(
     params_for_visual = get_params_for_sampling(cfg, train_state, param_type="visual")
     steps = [1, 2, 4, 8]
     n_samples = cfg.logging.plot_bs
-
-    # Target samples for ground-truth heatmap
-    target_samples = next(statics.ds)[:n_samples]
+    # Analytical target heatmap for checkerboard (uniform over support)
     margin = 0.5
-    xmin = float(target_samples[:, 0].min()) - margin
-    xmax = float(target_samples[:, 0].max()) + margin
-    ymin = float(target_samples[:, 1].min()) - margin
-    ymax = float(target_samples[:, 1].max()) + margin
-    xlim = (xmin, xmax)
-    ylim = (ymin, ymax)
-
-    h_target, extent = _make_uniform_logp_heatmap(
-        np.asarray(target_samples), xlim, ylim, bins=100, logp_value=-np.log(32.0)
+    base_range = 4.0
+    xlim = (-base_range - margin, base_range + margin)
+    ylim = (-base_range - margin, base_range + margin)
+    h_target, extent = _make_checker_logp_heatmap(
+        xlim, ylim, bins=100, logp_value=-np.log(32.0)
     )
 
     # Model samples + logp for each step
@@ -845,7 +870,7 @@ def make_likelihood_heatmap_plot(
         titles.append(f"Inverse log p(x), {step} steps")
 
     heatmaps, _, _ = _clip_heatmaps(heatmaps)
-    vmin, vmax = -6, -2
+    vmin, vmax = -5, -3
     heatmaps = [np.clip(h, vmin, vmax) for h in heatmaps]
 
     plt.close("all")

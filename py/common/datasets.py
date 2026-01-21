@@ -124,6 +124,10 @@ def prefetch_to_device(
     """Prefetch dataset batches onto device(s)."""
     if buffer_size <= 0:
         return ds
+    # For single-device training, avoid device_put_sharded which expects
+    # a leading device axis (len(shards) == ndevices).
+    if cfg.training.ndevices <= 1:
+        return ds
 
     def _iterator():
         for batch in ds:

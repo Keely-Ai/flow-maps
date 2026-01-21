@@ -33,32 +33,33 @@ def mean_reduce(func):
     return wrapper
 
 
-def _hutchinson_divergence(
+def _hutchinson_divergence_with_phi(
     params: Parameters,
-    s: float,
     t: float,
     x: jnp.ndarray,
     label: jnp.ndarray,
     rng: jnp.ndarray,
     *,
     X: flow_map.FlowMap,
-) -> jnp.ndarray:
-    """Estimate div(phi) with Hutchinson's estimator at a single (s,t,x)."""
+    method: str = "calc_b",
+) -> Tuple[jnp.ndarray, jnp.ndarray]:
+    """Estimate div(phi) with Hutchinson's estimator and return phi."""
     eps_key = rng["dropout"] if isinstance(rng, dict) else rng
     eps = jax.random.normal(eps_key, shape=x.shape)
 
-    def phi_dot(x_in):
-        phi = X.apply(
-            params, s, t, x_in, label, train=False, method="calc_phi", rngs=rng
+    def phi_fn(x_in):
+        return X.apply(
+            params, t, x_in, label, train=False, method=method, rngs=rng
         )
-        return jnp.sum(phi * eps)
 
-    grad_x = jax.grad(phi_dot)(x)
-    return jnp.sum(grad_x * eps)
+    phi, vjp_fn = jax.vjp(phi_fn, x)
+    div_hat = jnp.sum(vjp_fn(eps)[0] * eps)
+    return phi, div_hat
 
 
 def diagonal_term(
     params: Parameters,
+    teacher_params: Parameters,
     x0: jnp.ndarray,
     x1: jnp.ndarray,
     label: jnp.ndarray,
@@ -76,18 +77,34 @@ def diagonal_term(
 
     # compute the weighted loss
     bt_rslt = X.apply(
-        params, t, It, label, train=True, method="calc_b", rngs=rng, return_div=True
+        params,
+        t,
+        It,
+        label,
+        train=True,
+        method="calc_b",
+        rngs=rng,
+        return_div=True,
     )
+    
+    bt_teacher, div_hat = _hutchinson_divergence_with_phi(
+        teacher_params, t, It, label, rng, X=X, method="calc_b"
+    )
+    bt_teacher = jax.lax.stop_gradient(bt_teacher)
+    div_hat = jax.lax.stop_gradient(div_hat)
     if isinstance(bt_rslt, tuple):
         bt, div_tt = bt_rslt
     else:
         bt = bt_rslt
         div_tt = None
-    velocity_loss = jnp.sum((bt - It_dot) ** 2)
+        
+    # velocity_loss = jnp.sum((bt - It_dot) ** 2)
+    velocity_loss = jnp.sum((bt - bt_teacher) ** 2)
     if div_tt is not None:
-        # div_hat = _hutchinson_divergence(params, t, t, It, label, rng, X=X)
+        div_loss = jnp.sum((div_tt - div_hat) ** 2) * 0.1
         # velocity_loss = velocity_loss + jnp.sum((div_tt - div_hat) ** 2) * 0.1
-        pass
+        # pass
+        velocity_loss = velocity_loss + div_loss
 
     # Diagonal uses s=t
     weight_tt = X.apply(params, t, t, method="calc_weight")
@@ -262,7 +279,11 @@ def lsd_term(
 
     weight_st = X.apply(params, s, t, method="calc_weight")
     error = b_eval - dt_Xst
-    lsd_loss = jnp.sum(error**2)
+    if div_tt is not None:
+        error_div = div_tt - div_hat
+    lsd_v_loss = jnp.sum(error**2)
+    lsd_div_loss = jnp.sum(error_div**2) * 0.1
+    lsd_loss = lsd_v_loss + lsd_div_loss
     return jnp.exp(-weight_st) * lsd_loss + weight_st
 
 
@@ -371,10 +392,11 @@ def setup_loss(
 
     # Pure diagonal loss
     @mean_reduce
-    @functools.partial(jax.vmap, in_axes=(None, 0, 0, 0, 0, 0))
-    def diagonal_only_loss(params, x0, x1, label, t, rng):
+    @functools.partial(jax.vmap, in_axes=(None, None, 0, 0, 0, 0, 0))
+    def diagonal_only_loss(params, teacher_params, x0, x1, label, t, rng):
         return diagonal_term(
             params,
+            teacher_params,
             x0,
             x1,
             label,
@@ -440,7 +462,19 @@ def setup_loss(
         else:
             raise ValueError(f"Unknown loss_type: {cfg.training.loss_type}")
 
-    def loss(params, teacher_params, x0, x1, label, s, t, u, h, dropout_keys):
+    def loss(
+        params,
+        teacher_params_diag,
+        teacher_params_offdiag,
+        x0,
+        x1,
+        label,
+        s,
+        t,
+        u,
+        h,
+        dropout_keys,
+    ):
         """Split batch into diagonal and off-diagonal portions."""
         total_bs = x0.shape[0]
         diag_bs, offdiag_bs = loss_args._get_diag_offdiag_bs(cfg, total_bs)
@@ -452,6 +486,7 @@ def setup_loss(
             label_diag = None if label is None else label[:diag_bs]
             diag_loss = diagonal_only_loss(
                 params,
+                teacher_params_diag,
                 x0[:diag_bs],
                 x1[:diag_bs],
                 label_diag,
@@ -468,7 +503,7 @@ def setup_loss(
 
             offdiag_loss = offdiagonal_only_loss(
                 params,
-                teacher_params,
+                teacher_params_offdiag,
                 x0[diag_bs:],
                 x1[diag_bs:],
                 label_offdiag,
