@@ -152,6 +152,9 @@ def setup_state(cfg: config_dict.ConfigDict, prng_key: jnp.ndarray) -> Tuple[
         prng_key,
     )
 
+    # load optional teacher params
+    teacher_params = state_utils.load_teacher_params(cfg, train_state)
+
     # define the loss
     loss = losses.setup_loss(cfg, net, interp)
 
@@ -174,6 +177,7 @@ def setup_state(cfg: config_dict.ConfigDict, prng_key: jnp.ndarray) -> Tuple[
         interp=interp,
         sample_rho0=datasets.setup_base(cfg, ex_input),
         inception_fn=inception_fn,
+        teacher_params=teacher_params,
     )
 
     train_state = dist_utils.safe_replicate(cfg, train_state)

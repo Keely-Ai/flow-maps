@@ -6,7 +6,7 @@ Utilities for storing training state.
 """
 
 from copy import deepcopy
-from typing import Any, Callable, Dict, NamedTuple, Tuple
+from typing import Any, Callable, Dict, NamedTuple, Optional, Tuple
 
 import flax.linen as nn
 import jax
@@ -74,6 +74,7 @@ class StaticArgs(NamedTuple):
     interp: interpolant.Interpolant
     sample_rho0: Callable
     inception_fn: Callable = None  # For FID computation
+    teacher_params: Optional[Dict[str, Any]] = None  # Optional external teacher
 
 
 def load_checkpoint(
@@ -86,6 +87,34 @@ def load_checkpoint(
         train_state = from_bytes(train_state, raw_bytes)
 
     return train_state
+
+
+def load_teacher_params(
+    cfg: config_dict.ConfigDict,
+    train_state: EMATrainState,
+) -> Optional[Dict[str, Any]]:
+    """Load teacher params from checkpoint if configured."""
+    teacher_cfg = getattr(cfg, "teacher", None)
+    teacher_path = ""
+    teacher_ema_fac = None
+    if teacher_cfg is not None:
+        teacher_path = getattr(teacher_cfg, "load_path", "")
+        teacher_ema_fac = getattr(teacher_cfg, "ema_fac", None)
+    if not teacher_path:
+        return None
+
+    print(f"Loading teacher checkpoint from {teacher_path}.")
+    with open(teacher_path, "rb") as f:
+        raw_bytes = f.read()
+        teacher_state = from_bytes(train_state, raw_bytes)
+    print("Loaded teacher checkpoint.")
+    if teacher_ema_fac is not None:
+        ema_params = teacher_state.ema_params.get(teacher_ema_fac, None)
+        if ema_params is None:
+            print(f"Warning: teacher EMA {teacher_ema_fac} not found, using params.")
+            return teacher_state.params
+        return ema_params
+    return teacher_state.params
 
 
 def setup_schedule(

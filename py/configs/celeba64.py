@@ -37,7 +37,7 @@ def get_config(
     config.training.tmin = 0.0
     config.training.tmax = 1.0
     config.training.seed = 42
-    config.training.ema_facs = [0.999, 0.9999]
+    config.training.ema_facs = [0.9999]
     config.training.ndevices = jax.device_count()
 
     # problem config
@@ -55,7 +55,7 @@ def get_config(
     # optimization config
     config.optimization = ml_collections.ConfigDict()
     config.optimization.bs = 256
-    config.optimization.diag_fraction = 0.75
+    config.optimization.diag_fraction = 0.4
     config.optimization.learning_rate = 1e-2  # Initial learning rate
     config.optimization.clip = 1.0
     config.optimization.total_samples = 204_800_000
@@ -92,13 +92,13 @@ def get_config(
     # network config
     config.network = ml_collections.ConfigDict()
     config.network.network_type = "edm2"
-    config.network.load_path = ""  # No pretrained model
+    config.network.load_path = "/data/user_data/xinyueai/flow-maps/celeba-lsd-0.5/celeba_paper_lsd_41.pkl"  # No pretrained model
     config.network.img_resolution = config.problem.image_dims[1]
     config.network.img_channels = config.problem.image_dims[0]
     config.network.input_dims = config.problem.image_dims
     config.network.label_dim = 0  # No class conditioning for CelebA
     config.network.use_cfg = False
-    config.network.reset_optimizer = True
+    config.network.reset_optimizer = False
     config.network.logvar_channels = 128
     config.network.use_bfloat16 = True
     config.network.use_weight = True
@@ -115,5 +115,10 @@ def get_config(
             "dropout": 0.0,  # No dropout for CelebA
         },
     }
+
+    # optional teacher checkpoint
+    config.teacher = ml_collections.ConfigDict()
+    config.teacher.load_path = ""
+    config.teacher.ema_fac = 0.9999
 
     return config

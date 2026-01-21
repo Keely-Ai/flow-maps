@@ -46,13 +46,24 @@ class FlowMapMLP(nn.Module):
     config: config_dict.ConfigDict
 
     def setup(self):
-        self.phi_mlp = MLP(
+        self.act = get_act(self.config)
+        self.has_div = self.config.output_dim == 3
+        self.velocity_dim = self._get_velocity_dim()
+
+        self.trunk_mlp = MLP(
             self.config.n_hidden,
             self.config.n_neurons,
-            self.config.output_dim,
-            get_act(self.config),
+            self.config.n_neurons,
+            self.act,
             self.config.use_residual,
         )
+
+        self.v_head_dense0 = nn.Dense(self.config.n_neurons)
+        self.v_head_dense1 = nn.Dense(self.velocity_dim)
+
+        if self.has_div:
+            self.div_head_dense0 = nn.Dense(self.config.n_neurons)
+            self.div_head_dense1 = nn.Dense(1)
 
         self.weight_mlp = MLP(
             n_hidden=1,
@@ -61,6 +72,17 @@ class FlowMapMLP(nn.Module):
             act=jax.nn.gelu,
             use_residual=False,
         )
+
+    def _get_velocity_dim(self) -> int:
+        if hasattr(self.config, "input_dims") and self.config.input_dims is not None:
+            if isinstance(self.config.input_dims, tuple):
+                return int(self.config.input_dims[0])
+            return int(self.config.input_dims)
+        if isinstance(self.config.rescale, (list, tuple)):
+            return len(self.config.rescale)
+        if self.config.output_dim == 3:
+            return 2
+        return int(self.config.output_dim)
 
     def calc_weight(self, s: float, t: float) -> float:
         st = jnp.stack([s, t], axis=-1)
@@ -90,16 +112,14 @@ class FlowMapMLP(nn.Module):
             t_vec = jnp.broadcast_to(t, (x.shape[0],))
             st = jnp.stack([s_vec, t_vec], axis=-1)
             inp = jnp.concatenate((st, x / rescale), axis=-1)
-        raw_out = self.phi_mlp(inp)
-        div_st = None
+        features = self.trunk_mlp(inp)
+        phi_st = self.v_head_dense1(self.act(self.v_head_dense0(features)))
+        phi_st = rescale * phi_st
 
-        if self.config.output_dim == 2:
-            phi_st = rescale * raw_out
-        elif self.config.output_dim == 3:
-            phi_st = rescale * raw_out[..., :2]
-            div_st = raw_out[..., 2]
-        else:
-            raise ValueError("FlowMapMLP expects output_dim of 2 or 3.")
+        div_st = None
+        if self.has_div:
+            div_st = self.div_head_dense1(self.act(self.div_head_dense0(features)))
+            div_st = jnp.squeeze(div_st, axis=-1)
 
         if calc_weight:
             weight = self.calc_weight(s, t)
@@ -149,12 +169,12 @@ class FlowMapMLP(nn.Module):
         weight = None
 
         if calc_weight:
-            if return_div and self.config.output_dim == 3:
+            if return_div and self.has_div:
                 phi_st, div_st, weight = phi_rslt
             else:
                 phi_st, weight = phi_rslt
         else:
-            if return_div and self.config.output_dim == 3:
+            if return_div and self.has_div:
                 phi_st, div_st = phi_rslt
             else:
                 phi_st = phi_rslt

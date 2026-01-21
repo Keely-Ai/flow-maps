@@ -7,7 +7,7 @@
 #SBATCH --time=02-00:00
 #SBATCH --gres=gpu:4
 #SBATCH --mem=128GB
-#SBATCH --exclude=babel-v9-28,babel-x5-24
+#SBATCH --exclude=babel-v9-28,babel-x5-24,babel-w5-16,babel-x5-32,babel-w5-32
 #SBATCH --output=/home/xinyueai/Experiments/flow-maps/log/celeba_%A_%a.out
 #SBATCH --error=/home/xinyueai/Experiments/flow-maps/log/celeba_%A_%a.err
 
@@ -38,7 +38,7 @@ echo "Method: ${METHOD}"
 echo "PFMM Type: ${PFMM_TYPE}"
 echo "Stopgrad Type: ${STOPGRAD}"
 echo "Sampling: uniform_upper_triangle (half plane)"
-echo "Diagonal Fraction: 0.75 (75%)"
+echo "Diagonal Fraction: 0.30 (30%)"
 echo "Config: ${CONFIG_PATH}"
 echo "Output: ${OUTPUT_FOLDER}"
 echo "=========================================="

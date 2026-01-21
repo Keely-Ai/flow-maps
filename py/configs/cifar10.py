@@ -118,4 +118,9 @@ def get_config(
         },
     }
 
+    # optional teacher checkpoint
+    config.teacher = ml_collections.ConfigDict()
+    config.teacher.load_path = ""
+    config.teacher.ema_fac = 0.9999
+
     return config

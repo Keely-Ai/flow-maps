@@ -236,8 +236,13 @@ def get_loss_fn_args(
     # grab next batch of samples and labels
     x1batch, label_batch, prng_key = get_batch(cfg, statics, prng_key)
 
-    # set up the teacher (uses current params for self-distillation)
-    teacher_params = train_state.params
+    # set up the teacher (use external teacher if provided)
+    teacher_params = statics.teacher_params
+    if teacher_params is None:
+        teacher_params = train_state.params
+    else:
+        teacher_params = jax.tree_util.tree_map(jax.lax.stop_gradient, teacher_params)
+        teacher_params = dist_utils.safe_replicate(cfg, teacher_params)
 
     # for training flow map
     loss_fn_args = (

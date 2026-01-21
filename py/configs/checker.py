@@ -10,9 +10,9 @@ import ml_collections
 
 # Define experiments matching the CelebA/CIFAR sweep
 experiments = [
-    # ("lsd", None, "convex"),
-    ("psd", "uniform", "convex"),
-    ("psd", "midpoint", "convex"),
+    ("lsd", None, "convex"),
+    # ("psd", "uniform", "convex"),
+    # ("psd", "midpoint", "convex"),
     # ("esd", None, "full"),
 ]
 
@@ -59,13 +59,13 @@ def get_config(
 
     # optimization config - Using latest hyperparameters with checker-appropriate batch size
     config.optimization = ml_collections.ConfigDict()
-    config.optimization.bs = 100_000  # Large batch for efficient 2D training
+    config.optimization.bs = 10_000  # Large batch for efficient 2D training
     config.optimization.diag_fraction = (
         0.75  # 75% diagonal fraction (matching latest configs)
     )
     config.optimization.learning_rate = 1e-3  # Standard for checker
     config.optimization.clip = 10.0
-    config.optimization.total_steps = 125_000
+    config.optimization.total_steps = 150_000
     config.optimization.total_samples = (
         config.optimization.bs * config.optimization.total_steps
     )
@@ -75,8 +75,8 @@ def get_config(
     # logging config
     config.logging = ml_collections.ConfigDict()
     config.logging.plot_bs = 25_000
-    config.logging.visual_freq = 5_00
-    config.logging.save_freq = 20_00  # Save every 10k steps
+    config.logging.visual_freq = 25_000
+    config.logging.save_freq = 25_000  # Save every 10k steps
     config.logging.wandb_project = "self-distill-flow-maps"
 
     # Create systematic name for the experiment
@@ -109,14 +109,19 @@ def get_config(
     config.network.rescale = [1.0, 1.0]  # sigma_data (overwritten if adaptive)
 
     # Required but not used for MLP
-    config.network.load_path = "/home/xinyueai/Experiments/flow-maps/check_1/checker_paper_psd_uniform_24.pkl"
+    config.network.load_path = ""
     config.network.input_dims = (2,)
     config.network.load_ema_fac = None
     config.network.img_resolution = None
     config.network.img_channels = None
     config.network.label_dim = None
     config.network.logvar_channels = None
-    config.network.reset_optimizer = False
+    config.network.reset_optimizer = True
     config.network.unet_kwargs = None
+
+    # optional teacher checkpoint
+    config.teacher = ml_collections.ConfigDict()
+    config.teacher.load_path = ""
+    config.teacher.ema_fac = 0.999
 
     return config

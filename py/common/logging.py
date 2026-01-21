@@ -708,6 +708,63 @@ def _make_log_density_heatmap(xs, xlim, ylim, bins=100):
     return logp, extent
 
 
+def _make_uniform_logp_heatmap(xs, xlim, ylim, bins=100, logp_value=-np.log(32.0)):
+    """Uniform logp over occupied bins for checkerboard."""
+    x = xs[:, 0]
+    y = xs[:, 1]
+    hist_count, xedges, yedges = np.histogram2d(
+        x, y, bins=bins, range=[xlim, ylim]
+    )
+    logp = np.full_like(hist_count, np.nan, dtype=np.float64)
+    logp[hist_count > 0] = logp_value
+    extent = [xedges[0], xedges[-1], yedges[0], yedges[-1]]
+    return logp, extent
+
+
+def _make_grid_points(xlim, ylim, grid_size=200):
+    xs = jnp.linspace(xlim[0], xlim[1], grid_size)
+    ys = jnp.linspace(ylim[0], ylim[1], grid_size)
+    X, Y = jnp.meshgrid(xs, ys, indexing="ij")
+    pts = jnp.stack([X.reshape(-1), Y.reshape(-1)], axis=1)
+    return pts, X, Y
+
+
+def _inverse_logp_points_with_divhead(
+    apply_fn: Callable,
+    params: Dict,
+    x_t: jnp.ndarray,
+    n_steps: int,
+    label: jnp.ndarray,
+    *,
+    cfg: config_dict.ConfigDict,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Inverse logp on points using divergence head."""
+    dt = -1.0 / n_steps
+    t_curr = jnp.ones((x_t.shape[0],), dtype=jnp.float32)
+    x = x_t
+    delta_logp = jnp.zeros((x_t.shape[0],), dtype=jnp.float32)
+
+    for _ in range(n_steps):
+        t_next = t_curr + dt
+        phi, div = apply_fn(
+            params,
+            t_curr,
+            t_next,
+            x,
+            label,
+            train=False,
+            method="calc_phi",
+            return_div=True,
+        )
+        delta_logp = delta_logp - dt * div
+        x = x + dt * phi
+        t_curr = t_next
+
+    logp0 = _base_log_prob(cfg, x)
+    logp1 = logp0 - delta_logp
+    return np.asarray(x), np.asarray(logp1)
+
+
 def _clip_heatmaps(heatmaps):
     """Replace NaNs and compute shared vmin/vmax."""
     vals = []
@@ -749,8 +806,8 @@ def make_likelihood_heatmap_plot(
     xlim = (xmin, xmax)
     ylim = (ymin, ymax)
 
-    h_target, extent = _make_log_density_heatmap(
-        np.asarray(target_samples), xlim, ylim, bins=100
+    h_target, extent = _make_uniform_logp_heatmap(
+        np.asarray(target_samples), xlim, ylim, bins=100, logp_value=-np.log(32.0)
     )
 
     # Model samples + logp for each step
@@ -759,7 +816,7 @@ def make_likelihood_heatmap_plot(
     labels = -jnp.ones((n_samples,))
 
     heatmaps = [h_target]
-    titles = ["Target log p(x)"]
+    titles = ["Target log p(x) = -ln(32)"]
     for step in steps:
         xs, logp = _sample_model_nsteps_with_logp(
             train_state.apply_fn,
@@ -773,8 +830,22 @@ def make_likelihood_heatmap_plot(
         heatmaps.append(h_step)
         titles.append(f"Mean log p(x), {step} steps")
 
+        grid_pts, X, Y = _make_grid_points(xlim, ylim, grid_size=200)
+        grid_labels = -jnp.ones((grid_pts.shape[0],))
+        _, logp_inv = _inverse_logp_points_with_divhead(
+            train_state.apply_fn,
+            params_for_visual,
+            grid_pts,
+            step,
+            grid_labels,
+            cfg=cfg,
+        )
+        h_inv = logp_inv.reshape(X.shape)
+        heatmaps.append(np.asarray(h_inv))
+        titles.append(f"Inverse log p(x), {step} steps")
+
     heatmaps, _, _ = _clip_heatmaps(heatmaps)
-    vmin, vmax = -4.4, -3.2
+    vmin, vmax = -6, -2
     heatmaps = [np.clip(h, vmin, vmax) for h in heatmaps]
 
     plt.close("all")
