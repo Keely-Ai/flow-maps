@@ -80,7 +80,7 @@ def train_loop(
         )
 
         # take a step on the loss
-        train_state, loss_value, grads = statics.train_step(
+        train_state, loss_value, grads, metrics = statics.train_step(
             train_state, statics.loss, loss_fn_args
         )
         end_time = time.time()
@@ -96,6 +96,7 @@ def train_loop(
                 train_state,
                 grads,
                 loss_value,
+                metrics,
                 loss_fn_args,
                 prng_key,
                 end_time - start_time,

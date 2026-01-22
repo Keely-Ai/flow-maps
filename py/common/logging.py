@@ -289,6 +289,7 @@ def log_metrics(
     train_state: state_utils.EMATrainState,
     grads: jnp.ndarray,
     loss_value: float,
+    loss_metrics: Dict[str, jnp.ndarray],
     loss_fn_args: Tuple,
     prng_key: jnp.ndarray,
     step_time: float,
@@ -297,6 +298,7 @@ def log_metrics(
 
     grads = dist_utils.safe_unreplicate(cfg, grads)
     loss_value = dist_utils.safe_index(cfg, jnp.array(loss_value))
+    loss_metrics = dist_utils.safe_unreplicate(cfg, loss_metrics)
     step = dist_utils.safe_index(cfg, train_state.step)
     learning_rate = statics.schedule(step)
 
@@ -307,6 +309,7 @@ def log_metrics(
         f"learning_rate": learning_rate,
         f"step_time": step_time,
     }
+    metrics.update(loss_metrics)
 
     # Compute FID on-the-fly if enabled and at the right frequency
     if (
@@ -547,7 +550,7 @@ def make_loss_fn_args_plot(
 ) -> None:
     """Make a plot of the loss function arguments."""
     # unpack the full loss arguments
-    data_args = loss_fn_args[1:]
+    data_args = loss_fn_args[2:]
     (x0batch, x1batch, _, sbatch, tbatch, _, _, _) = (
         dist_utils.unreplicate_loss_fn_args(cfg, data_args)
     )
@@ -826,6 +829,8 @@ def make_likelihood_heatmap_plot(
     params_for_visual = get_params_for_sampling(cfg, train_state, param_type="visual")
     steps = [1, 2, 4, 8]
     n_samples = cfg.logging.plot_bs
+    if cfg.problem.target == "checker":
+        n_samples = getattr(cfg.logging, "likelihood_n_samples", max(n_samples, 500_000))
     # Analytical target heatmap for checkerboard (uniform over support)
     margin = 0.5
     base_range = 4.0
@@ -870,7 +875,7 @@ def make_likelihood_heatmap_plot(
         titles.append(f"Inverse log p(x), {step} steps")
 
     heatmaps, _, _ = _clip_heatmaps(heatmaps)
-    vmin, vmax = -5, -3
+    vmin, vmax = -10, 2
     heatmaps = [np.clip(h, vmin, vmax) for h in heatmaps]
 
     plt.close("all")

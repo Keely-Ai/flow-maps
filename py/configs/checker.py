@@ -63,7 +63,7 @@ def get_config(
     config.optimization = ml_collections.ConfigDict()
     config.optimization.bs = 10_000  # Large batch for efficient 2D training
     config.optimization.diag_fraction = (
-        0.75  # 75% diagonal fraction (matching latest configs)
+        0.5  # 75% diagonal fraction (matching latest configs)
     )
     config.optimization.learning_rate = 1e-3  # Standard for checker
     config.optimization.clip = 10.0
@@ -76,9 +76,9 @@ def get_config(
 
     # logging config
     config.logging = ml_collections.ConfigDict()
-    config.logging.plot_bs = 25_000
-    config.logging.visual_freq = 25_000
-    config.logging.save_freq = 25_000  # Save every 10k steps
+    config.logging.plot_bs = 5_000
+    config.logging.visual_freq = 5_000
+    config.logging.save_freq = 5_000  # Save every 10k steps
     config.logging.wandb_project = "self-distill-flow-maps"
 
     # Create systematic name for the experiment
@@ -118,7 +118,7 @@ def get_config(
     config.network.img_channels = None
     config.network.label_dim = None
     config.network.logvar_channels = None
-    config.network.reset_optimizer = False
+    config.network.reset_optimizer = True
     config.network.unet_kwargs = None
 
     # optional teacher checkpoint

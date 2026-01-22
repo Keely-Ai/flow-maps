@@ -61,10 +61,20 @@ class FlowMap(nn.Module):
         label: float = None,
         train: bool = True,
         calc_weight: bool = False,
+        return_div: bool = False,
     ) -> jnp.ndarray:
         """Compute the partial derivative with respect to time."""
         Xst, dt_Xst = jax.jvp(
-            lambda t: self.flow_map(s, t, x, label, train, calc_weight),
+            lambda t: self.flow_map(
+                s,
+                t,
+                x,
+                label,
+                train,
+                calc_weight,
+                return_X_and_phi=False,
+                return_div=return_div,
+            ),
             primals=(t,),
             tangents=(jnp.ones_like(t),),
         )

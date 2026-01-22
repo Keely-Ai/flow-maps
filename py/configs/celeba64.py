@@ -92,7 +92,7 @@ def get_config(
     # network config
     config.network = ml_collections.ConfigDict()
     config.network.network_type = "edm2"
-    config.network.load_path = "/data/user_data/xinyueai/flow-maps/celeba-lsd-0.5/celeba_paper_lsd_41.pkl"  # No pretrained model
+    config.network.load_path = "/data/user_data/xinyueai/flow-maps/celeba-lsd/celeba_paper_lsd_64.pkl"  # No pretrained model
     config.network.img_resolution = config.problem.image_dims[1]
     config.network.img_channels = config.problem.image_dims[0]
     config.network.input_dims = config.problem.image_dims
@@ -118,7 +118,7 @@ def get_config(
 
     # optional teacher checkpoint
     config.teacher = ml_collections.ConfigDict()
-    config.teacher.load_path = ""
+    config.teacher.load_path = "/data/user_data/xinyueai/flow-maps/celeba-lsd/celeba_paper_lsd_64.pkl"
     config.teacher.ema_fac = 0.9999
 
     return config

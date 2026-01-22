@@ -28,7 +28,7 @@ def mean_reduce(func):
     @functools.wraps(func)
     def wrapper(*args, **kwargs):
         batched_outputs = func(*args, **kwargs)
-        return jnp.mean(batched_outputs)
+        return jax.tree_util.tree_map(lambda x: jnp.mean(x), batched_outputs)
 
     return wrapper
 
@@ -68,7 +68,7 @@ def diagonal_term(
     *,
     interp: interpolant.Interpolant,
     X: flow_map.FlowMap,
-) -> float:
+) -> Tuple[jnp.ndarray, Dict[str, jnp.ndarray]]:
     """Compute the diagonal (interpolant) term of the loss."""
 
     # compute interpolant and the target
@@ -99,16 +99,24 @@ def diagonal_term(
         div_tt = None
         
     # velocity_loss = jnp.sum((bt - It_dot) ** 2)
-    velocity_loss = jnp.sum((bt - bt_teacher) ** 2)
+    base_velocity_loss = jnp.sum((bt - bt_teacher) ** 2)
+    div_loss = jnp.array(0.0, dtype=base_velocity_loss.dtype)
     if div_tt is not None:
         div_loss = jnp.sum((div_tt - div_hat) ** 2) * 0.1
         # velocity_loss = velocity_loss + jnp.sum((div_tt - div_hat) ** 2) * 0.1
         # pass
-        velocity_loss = velocity_loss + div_loss
+        velocity_loss = base_velocity_loss + div_loss
+    else:
+        velocity_loss = base_velocity_loss
 
     # Diagonal uses s=t
     weight_tt = X.apply(params, t, t, method="calc_weight")
-    return jnp.exp(-weight_tt) * velocity_loss + weight_tt
+    loss_value = jnp.exp(-weight_tt) * velocity_loss + weight_tt
+    metrics = {
+        "diag/velocity_loss": jax.lax.stop_gradient(base_velocity_loss),
+        "diag/div_loss": jax.lax.stop_gradient(div_loss),
+    }
+    return loss_value, metrics
 
 
 def psd_term(
@@ -233,21 +241,29 @@ def lsd_term(
     interp: interpolant.Interpolant,
     X: flow_map.FlowMap,
     stopgrad_type: str,
-) -> float:
+) -> Tuple[jnp.ndarray, Dict[str, jnp.ndarray]]:
     """Compute the LSD term of the loss."""
     Is = interp.calc_It(s, x0, x1)
 
-    def _primary_output(value):
+    def _split_output(value):
         if isinstance(value, tuple):
-            return value[0]
-        return value
+            return value[0], value[1]
+        return value, None
 
     # Compute the distillation loss
     Xst_Is, dt_Xst = X.apply(
-        params, s, t, Is, label, train=False, method="partial_t", rngs=rng
+        params,
+        s,
+        t,
+        Is,
+        label,
+        train=False,
+        method="partial_t",
+        rngs=rng,
+        return_div=True,
     )
-    Xst_Is = _primary_output(Xst_Is)
-    dt_Xst = _primary_output(dt_Xst)
+    Xst_Is, _ = _split_output(Xst_Is)
+    dt_Xst, dt_Xst_div = _split_output(dt_Xst)
 
     if stopgrad_type == "convex":
         Xst_Is = jax.lax.stop_gradient(Xst_Is)
@@ -260,6 +276,7 @@ def lsd_term(
                 train=False,
                 method="calc_b",
                 rngs=rng,
+                return_div=True,
             )
         )
     elif stopgrad_type == "none":
@@ -271,20 +288,28 @@ def lsd_term(
             train=False,
             method="calc_b",
             rngs=rng,
+            return_div=True,
         )
     else:
         raise ValueError(f"Invalid stopgrad_type: {stopgrad_type}")
 
-    b_eval = _primary_output(b_eval)
+    b_eval, b_eval_div = _split_output(b_eval)
 
     weight_st = X.apply(params, s, t, method="calc_weight")
     error = b_eval - dt_Xst
-    if div_tt is not None:
-        error_div = div_tt - div_hat
+    if dt_Xst_div is not None:
+        error_div = dt_Xst_div - b_eval_div
+        lsd_div_loss = jnp.sum(error_div**2) * 0.1
+    else:
+        lsd_div_loss = jnp.array(0.0, dtype=error.dtype)
     lsd_v_loss = jnp.sum(error**2)
-    lsd_div_loss = jnp.sum(error_div**2) * 0.1
     lsd_loss = lsd_v_loss + lsd_div_loss
-    return jnp.exp(-weight_st) * lsd_loss + weight_st
+    loss_value = jnp.exp(-weight_st) * lsd_loss + weight_st
+    metrics = {
+        "lsd/lsd_v_loss": jax.lax.stop_gradient(lsd_v_loss),
+        "lsd/lsd_div_loss": jax.lax.stop_gradient(lsd_div_loss),
+    }
+    return loss_value, metrics
 
 
 def esd_term(
@@ -430,7 +455,7 @@ def setup_loss(
                 X=net,
                 psd_type=cfg.training.psd_type,
                 stopgrad_type=cfg.training.stopgrad_type,
-            )
+            ), {}
         elif cfg.training.loss_type == "lsd":
             return lsd_term(
                 params,
@@ -458,7 +483,7 @@ def setup_loss(
                 interp=interp,
                 X=net,
                 stopgrad_type=cfg.training.stopgrad_type,
-            )
+            ), {}
         else:
             raise ValueError(f"Unknown loss_type: {cfg.training.loss_type}")
 
@@ -480,11 +505,17 @@ def setup_loss(
         diag_bs, offdiag_bs = loss_args._get_diag_offdiag_bs(cfg, total_bs)
 
         total_loss = 0.0
+        total_metrics = {}
+
+        def _add_metrics(metrics, new_metrics):
+            for key, value in new_metrics.items():
+                metrics[key] = metrics.get(key, 0.0) + value
+            return metrics
 
         # Compute diagonal loss on first portion
         if diag_bs > 0:
             label_diag = None if label is None else label[:diag_bs]
-            diag_loss = diagonal_only_loss(
+            diag_loss, diag_metrics = diagonal_only_loss(
                 params,
                 teacher_params_diag,
                 x0[:diag_bs],
@@ -494,6 +525,10 @@ def setup_loss(
                 dropout_keys[:diag_bs],
             )
             total_loss += diag_loss * diag_bs
+            total_metrics = _add_metrics(
+                total_metrics,
+                {k: v * diag_bs for k, v in diag_metrics.items()},
+            )
 
         # Compute off-diagonal loss on second portion
         if offdiag_bs > 0:
@@ -501,7 +536,7 @@ def setup_loss(
             u_offdiag = None if u is None else u[diag_bs:]
             h_offdiag = None if h is None else h[diag_bs:]
 
-            offdiag_loss = offdiagonal_only_loss(
+            offdiag_loss, offdiag_metrics = offdiagonal_only_loss(
                 params,
                 teacher_params_offdiag,
                 x0[diag_bs:],
@@ -514,8 +549,20 @@ def setup_loss(
                 dropout_keys[diag_bs:],
             )
             total_loss += offdiag_loss * offdiag_bs
+            total_metrics = _add_metrics(
+                total_metrics,
+                {k: v * offdiag_bs for k, v in offdiag_metrics.items()},
+            )
 
         # Normalize by total batch size
-        return total_loss / total_bs
+        total_loss = total_loss / total_bs
+        if cfg.training.loss_type != "lsd":
+            total_metrics = {}
+        elif total_metrics:
+            total_metrics = jax.tree_util.tree_map(
+                lambda x: jax.lax.stop_gradient(x / total_bs),
+                total_metrics,
+            )
+        return total_loss, total_metrics
 
     return loss
