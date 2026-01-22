@@ -87,26 +87,29 @@ def _inverse_logp_euler(
     def body(_, state):
         t_curr, x, delta_logp, rng_key = state
         t_next = t_curr + dt
+        b = apply_fn(
+            params,
+            t_curr,
+            x,
+            None,
+            train=False,
+            method="calc_b",
+        )
         rng_key, eps_key = jax.random.split(rng_key)
         eps = jax.random.normal(eps_key, shape=x.shape)
-
-        def b_and_div(x_i, t_i, eps_i):
-            b_i, vjp_fn = jax.vjp(
-                lambda x_in: apply_fn(
-                    params,
-                    t_i,
-                    x_in,
-                    None,
-                    train=False,
-                    method="calc_b",
-                ),
-                x_i,
-            )
-            div_i = jnp.sum(vjp_fn(eps_i)[0] * eps_i)
-            return b_i, div_i
-
-        b, div = jax.vmap(b_and_div)(x, t_curr, eps)
-        jax.debug.print("t={}, div_mean={}", t_curr[0], div.mean())
+        _, vjp_fn = jax.vjp(
+            lambda x_in: apply_fn(
+                params,
+                t_curr,
+                x_in,
+                None,
+                train=False,
+                method="calc_b",
+            ),
+            x,
+        )
+        div = jnp.sum(vjp_fn(eps)[0] * eps, axis=tuple(range(1, x.ndim)))
+        # jax.debug.print("t={}, div_mean={}", t_curr[0], div.mean())
         x = x + dt * b
         delta_logp = delta_logp - dt * div
         return t_next, x, delta_logp, rng_key
@@ -115,6 +118,7 @@ def _inverse_logp_euler(
         0, n_steps, body, (t_curr, x, delta_logp, rng_key)
     )
     logp0 = _base_log_prob(x0, rescale)
+    # jax.debug.print("rescale={}",rescale)
     return logp0 - delta_logp
 
 
@@ -161,8 +165,8 @@ def parse_args():
         type=str,
         default="/data/user_data/xinyueai/flow-maps/celeba-lsd/celeba_paper_lsd_64.pkl",
     )
-    parser.add_argument("--batch_size", type=int, default=64)
-    parser.add_argument("--n_steps", type=int, default=8)
+    parser.add_argument("--batch_size", type=int, default=128)
+    parser.add_argument("--n_steps", type=int, default=1024)
     parser.add_argument("--seed", type=int, default=2)
     parser.add_argument(
         "--no_dequantize",
