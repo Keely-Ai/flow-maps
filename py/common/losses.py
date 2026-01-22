@@ -53,7 +53,7 @@ def _hutchinson_divergence_with_phi(
         )
 
     phi, vjp_fn = jax.vjp(phi_fn, x)
-    div_hat = jnp.sum(vjp_fn(eps)[0] * eps)
+    div_hat = jnp.sum(vjp_fn(eps)[0] * eps, axis=tuple(range(1, x.ndim)))
     return phi, div_hat
 
 
@@ -250,6 +250,14 @@ def lsd_term(
             return value[0], value[1]
         return value, None
 
+    def _safe(x, clip=None):
+        if x is None:
+            return None
+        x = jnp.nan_to_num(x, nan=0.0, posinf=1e4, neginf=-1e4)
+        if clip is not None:
+            x = jnp.clip(x, -clip, clip)
+        return x
+
     # Compute the distillation loss
     Xst_Is, dt_Xst = X.apply(
         params,
@@ -262,8 +270,8 @@ def lsd_term(
         rngs=rng,
         return_div=True,
     )
-    Xst_Is, _ = _split_output(Xst_Is)
-    dt_Xst, dt_Xst_div = _split_output(dt_Xst)
+    Xst_Is, D_st = _split_output(Xst_Is)
+    dt_Xst, dt_Dst = _split_output(dt_Xst)
 
     if stopgrad_type == "convex":
         Xst_Is = jax.lax.stop_gradient(Xst_Is)
@@ -295,15 +303,16 @@ def lsd_term(
 
     b_eval, b_eval_div = _split_output(b_eval)
 
-    weight_st = X.apply(params, s, t, method="calc_weight")
-    error = b_eval - dt_Xst
-    if dt_Xst_div is not None:
-        error_div = dt_Xst_div - b_eval_div
+    weight_st = _safe(X.apply(params, s, t, method="calc_weight"), clip=20.0)
+    error = _safe(b_eval) - _safe(dt_Xst)
+    if D_st is not None:
+        A_dot = _safe(D_st) + (t - s) * _safe(dt_Dst)
+        error_div = A_dot - _safe(b_eval_div)
         lsd_div_loss = jnp.sum(error_div**2) * 0.1
     else:
         lsd_div_loss = jnp.array(0.0, dtype=error.dtype)
     lsd_v_loss = jnp.sum(error**2)
-    lsd_loss = lsd_v_loss + lsd_div_loss
+    lsd_loss = _safe(lsd_v_loss + lsd_div_loss, clip=1e6)
     loss_value = jnp.exp(-weight_st) * lsd_loss + weight_st
     metrics = {
         "lsd/lsd_v_loss": jax.lax.stop_gradient(lsd_v_loss),

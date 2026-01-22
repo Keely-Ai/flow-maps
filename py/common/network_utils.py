@@ -219,16 +219,33 @@ class EDM2FlowMap(nn.Module):
         )
 
     def process_inputs(self, s: float, t: float, x: jnp.ndarray, label: float = None):
-        # add batch dimensions
+        # add batch dimension when needed
         s = jnp.asarray(s, dtype=jnp.float32)
         t = jnp.asarray(t, dtype=jnp.float32)
-        x = x.reshape((1, *x.shape))
+        if x.ndim == 3:
+            x = x[None, ...]
+            is_single = True
+        elif x.ndim == 4:
+            is_single = False
+        else:
+            raise ValueError(f"Unsupported x shape: {x.shape}")
+
+        batch_size = x.shape[0]
+        s = jnp.broadcast_to(s, (batch_size,))
+        t = jnp.broadcast_to(t, (batch_size,))
 
         # one-hot encode
-        if label != None:
-            label = jax.nn.one_hot(label, num_classes=self.one_hot_dim).reshape((1, -1))
+        if label is not None:
+            label = jnp.asarray(label)
+            if label.ndim == 0:
+                label = jnp.broadcast_to(label, (batch_size,))
+            elif label.ndim == 1 and label.shape[0] != batch_size:
+                label = jnp.broadcast_to(label, (batch_size,))
+            label = jax.nn.one_hot(label, num_classes=self.one_hot_dim).reshape(
+                (batch_size, -1)
+            )
 
-        return s, t, x, label
+        return s, t, x, label, is_single
 
     def calc_weight(self, s: float, t: float) -> jnp.ndarray:
         # add batch dimension
@@ -247,7 +264,7 @@ class EDM2FlowMap(nn.Module):
         init_weights: bool = False,
         return_div: bool = False,
     ) -> jnp.ndarray:
-        s, t, x, label = self.process_inputs(s, t, x, label)
+        s, t, x, label, is_single = self.process_inputs(s, t, x, label)
         rslt = self.net.calc_phi(
             s, t, x, label, train, calc_weight, init_weights, return_div
         )
@@ -258,16 +275,24 @@ class EDM2FlowMap(nn.Module):
             else:
                 phi_st, logvar = rslt
             if return_div and div_st is not None:
-                return phi_st[0], div_st[0], logvar[0]
-            return phi_st[0], logvar[0]
+                if is_single:
+                    return phi_st[0], div_st[0], logvar[0]
+                return phi_st, div_st, logvar
+            if is_single:
+                return phi_st[0], logvar[0]
+            return phi_st, logvar
         else:
             if return_div and isinstance(rslt, tuple) and len(rslt) == 2:
                 phi_st, div_st = rslt
             else:
                 phi_st = rslt
             if return_div and div_st is not None:
-                return phi_st[0], div_st[0]
-            return phi_st[0]
+                if is_single:
+                    return phi_st[0], div_st[0]
+                return phi_st, div_st
+            if is_single:
+                return phi_st[0]
+            return phi_st
 
     def calc_b(
         self,
@@ -278,7 +303,7 @@ class EDM2FlowMap(nn.Module):
         calc_weight: bool = False,
         return_div: bool = False,
     ) -> jnp.ndarray:
-        _, t, x, label = self.process_inputs(t, t, x, label)
+        _, t, x, label, is_single = self.process_inputs(t, t, x, label)
         rslt = self.net.calc_b(t, x, label, train, calc_weight, return_div)
         div_st = None
         if calc_weight:
@@ -287,16 +312,24 @@ class EDM2FlowMap(nn.Module):
             else:
                 bt, logvar = rslt
             if return_div and div_st is not None:
-                return bt[0], div_st[0], logvar[0]
-            return bt[0], logvar[0]
+                if is_single:
+                    return bt[0], div_st[0], logvar[0]
+                return bt, div_st, logvar
+            if is_single:
+                return bt[0], logvar[0]
+            return bt, logvar
         else:
             if return_div and isinstance(rslt, tuple) and len(rslt) == 2:
                 bt, div_st = rslt
             else:
                 bt = rslt
             if return_div and div_st is not None:
-                return bt[0], div_st[0]
-            return bt[0]
+                if is_single:
+                    return bt[0], div_st[0]
+                return bt, div_st
+            if is_single:
+                return bt[0]
+            return bt
 
     def __call__(
         self,
@@ -310,7 +343,7 @@ class EDM2FlowMap(nn.Module):
         init_weights: bool = False,
         return_div: bool = False,
     ):
-        s, t, x, label = self.process_inputs(s, t, x, label)
+        s, t, x, label, is_single = self.process_inputs(s, t, x, label)
         rslt = self.net(
             s, t, x, label, train, calc_weight, return_X_and_phi, init_weights, return_div
         )
@@ -322,24 +355,36 @@ class EDM2FlowMap(nn.Module):
             else:
                 Xst, logvar = rslt
             if return_div and div_st is not None:
-                return Xst[0], div_st[0], logvar[0]
-            return Xst[0], logvar[0]
+                if is_single:
+                    return Xst[0], div_st[0], logvar[0]
+                return Xst, div_st, logvar
+            if is_single:
+                return Xst[0], logvar[0]
+            return Xst, logvar
         elif return_X_and_phi:
             if return_div and isinstance(rslt, tuple) and len(rslt) == 3:
                 Xst, phi_st, div_st = rslt
             else:
                 Xst, phi_st = rslt
             if return_div and div_st is not None:
-                return Xst[0], phi_st[0], div_st[0]
-            return Xst[0], phi_st[0]
+                if is_single:
+                    return Xst[0], phi_st[0], div_st[0]
+                return Xst, phi_st, div_st
+            if is_single:
+                return Xst[0], phi_st[0]
+            return Xst, phi_st
         else:
             if return_div and isinstance(rslt, tuple) and len(rslt) == 2:
                 Xst, div_st = rslt
             else:
                 Xst = rslt
             if return_div and div_st is not None:
-                return Xst[0], div_st[0]
-            return Xst[0]
+                if is_single:
+                    return Xst[0], div_st[0]
+                return Xst, div_st
+            if is_single:
+                return Xst[0]
+            return Xst
 
 
 def get_act(
