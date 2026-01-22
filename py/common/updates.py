@@ -60,10 +60,31 @@ def setup_train_step(cfg: config_dict.ConfigDict) -> Callable:
                 lambda x: jax.lax.pmean(x, axis_name="data"), metrics
             )
 
-        state = state.apply_gradients(grads=grads)
+        def _all_finite(tree):
+            leaves = jax.tree_util.tree_leaves(tree)
+            if not leaves:
+                return jnp.array(True)
+            finite_flags = [jnp.all(jnp.isfinite(x)) for x in leaves]
+            return jnp.all(jnp.stack(finite_flags))
 
-        # project for the edm2 network
-        state = state.replace(params=edm2_net.safe_project_to_sphere(cfg, state.params))
+        grads_finite = _all_finite(grads)
+        loss_finite = jnp.all(jnp.isfinite(loss_value))
+        all_finite = grads_finite & loss_finite
+        if cfg.training.ndevices > 1:
+            all_finite = jax.lax.pmin(all_finite.astype(jnp.int32), axis_name="data")
+            all_finite = all_finite.astype(jnp.bool_)
+
+        def _apply_updates(curr_state):
+            next_state = curr_state.apply_gradients(grads=grads)
+            return next_state.replace(
+                params=edm2_net.safe_project_to_sphere(cfg, next_state.params)
+            )
+
+        state = jax.lax.cond(all_finite, _apply_updates, lambda s: s, state)
+        metrics = dict(metrics)
+        metrics["train/loss_finite"] = loss_finite
+        metrics["train/grads_finite"] = grads_finite
+        metrics["train/nan_detected"] = jnp.logical_not(all_finite)
 
         return state, loss_value, grads, metrics
 

@@ -875,7 +875,7 @@ def make_likelihood_heatmap_plot(
         titles.append(f"Inverse log p(x), {step} steps")
 
     heatmaps, _, _ = _clip_heatmaps(heatmaps)
-    vmin, vmax = -5, -3
+    vmin, vmax = -4, -3
     heatmaps = [np.clip(h, vmin, vmax) for h in heatmaps]
 
     plt.close("all")

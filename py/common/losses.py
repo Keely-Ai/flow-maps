@@ -53,7 +53,22 @@ def _hutchinson_divergence_with_phi(
         )
 
     phi, vjp_fn = jax.vjp(phi_fn, x)
-    div_hat = jnp.sum(vjp_fn(eps)[0] * eps, axis=tuple(range(1, x.ndim)))
+    def _div_axes(x_in, label_in):
+        if x_in.ndim == 4:
+            return (1, 2, 3)
+        if x_in.ndim == 3:
+            return (0, 1, 2)
+        if x_in.ndim == 2:
+            if label_in is not None and jnp.ndim(label_in) > 0:
+                if label_in.shape[0] == x_in.shape[0]:
+                    return (1,)
+            return (0, 1)
+        if x_in.ndim == 1:
+            return (0,)
+        return tuple(range(x_in.ndim))
+
+    div_axes = _div_axes(x, label)
+    div_hat = jnp.sum(vjp_fn(eps)[0] * eps, axis=div_axes)
     return phi, div_hat
 
 
@@ -250,14 +265,6 @@ def lsd_term(
             return value[0], value[1]
         return value, None
 
-    def _safe(x, clip=None):
-        if x is None:
-            return None
-        x = jnp.nan_to_num(x, nan=0.0, posinf=1e4, neginf=-1e4)
-        if clip is not None:
-            x = jnp.clip(x, -clip, clip)
-        return x
-
     # Compute the distillation loss
     Xst_Is, dt_Xst = X.apply(
         params,
@@ -303,16 +310,16 @@ def lsd_term(
 
     b_eval, b_eval_div = _split_output(b_eval)
 
-    weight_st = _safe(X.apply(params, s, t, method="calc_weight"), clip=20.0)
-    error = _safe(b_eval) - _safe(dt_Xst)
+    weight_st = X.apply(params, s, t, method="calc_weight")
+    error = b_eval - dt_Xst
     if D_st is not None:
-        A_dot = _safe(D_st) + (t - s) * _safe(dt_Dst)
-        error_div = A_dot - _safe(b_eval_div)
+        A_dot = D_st + (t - s) * dt_Dst
+        error_div = A_dot - b_eval_div
         lsd_div_loss = jnp.sum(error_div**2) * 0.1
     else:
         lsd_div_loss = jnp.array(0.0, dtype=error.dtype)
     lsd_v_loss = jnp.sum(error**2)
-    lsd_loss = _safe(lsd_v_loss + lsd_div_loss, clip=1e6)
+    lsd_loss = lsd_v_loss + lsd_div_loss
     loss_value = jnp.exp(-weight_st) * lsd_loss + weight_st
     metrics = {
         "lsd/lsd_v_loss": jax.lax.stop_gradient(lsd_v_loss),
