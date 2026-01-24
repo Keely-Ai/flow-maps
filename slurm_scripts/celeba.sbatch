@@ -14,7 +14,7 @@
 ## Configuration
 PY_DIR=/home/xinyueai/Experiments/flow-maps/py
 CONFIG_PATH="configs.celeba64"
-OUTPUT_FOLDER="/data/user_data/xinyueai/flow-maps/celeba-lsd-10000-0.5"
+OUTPUT_FOLDER="/data/user_data/xinyueai/flow-maps/celeba-lsd-teacher"
 DATASET_LOCATION="/home/xinyueai/Experiments/data"
 
 # Single experiment: LSD

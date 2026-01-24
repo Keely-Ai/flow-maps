@@ -860,7 +860,7 @@ def _inverse_logp_euler_divhead(
             return_div=True,
         )
         x = x + dt * phi
-        delta_logp = delta_logp - dt * div * 50000.0
+        delta_logp = delta_logp - dt * div * 10000.0
         jax.debug.print("t={}, div_mean={}", t_curr[0], div.mean())
         return t_next, x, delta_logp
 

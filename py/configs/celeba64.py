@@ -57,7 +57,7 @@ def get_config(
     # optimization config
     config.optimization = ml_collections.ConfigDict()
     config.optimization.bs = 256
-    config.optimization.diag_fraction = 0.75
+    config.optimization.diag_fraction = 0.5
     config.optimization.learning_rate = 1e-4  # Initial learning rate
     config.optimization.clip = 1.0
     config.optimization.total_samples = 204_800_000

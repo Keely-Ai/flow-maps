@@ -96,6 +96,7 @@ def _inverse_logp_euler(
             method="calc_phi",
             return_div=True,
         )
+        jax.debug.print("t={}, div={}", t_curr[0], div)
         x = x + dt * b
         delta_logp = delta_logp - dt * div
         return t_next, x, delta_logp
@@ -149,10 +150,10 @@ def parse_args():
     parser.add_argument(
         "--checkpoint",
         type=str,
-        default="/data/user_data/xinyueai/flow-maps/celeba-lsd/celeba_paper_lsd_64.pkl",
+        default="/data/user_data/xinyueai/flow-maps/celeba-lsd-100-0.5/celeba_paper_lsd_1.pkl",
     )
-    parser.add_argument("--batch_size", type=int, default=64)
-    parser.add_argument("--n_steps", type=int, default=8)
+    parser.add_argument("--batch_size", type=int, default=4)
+    parser.add_argument("--n_steps", type=int, default=2048)
     parser.add_argument("--seed", type=int, default=2)
     parser.add_argument(
         "--no_dequantize",

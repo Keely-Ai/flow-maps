@@ -121,7 +121,7 @@ def diagonal_term(
         teacher_params, t, It, label, rng, X=X, method="calc_b"
     )
     bt_teacher = jax.lax.stop_gradient(bt_teacher)
-    div_hat = jax.lax.stop_gradient(div_hat) / 50000.0
+    div_hat = jax.lax.stop_gradient(div_hat) / 10000.0
     # jax.debug.print("t={}, div_hat={}", t, div_hat)
     if isinstance(bt_rslt, tuple):
         bt, div_tt = bt_rslt
@@ -209,7 +209,7 @@ def lsd_term(
             teacher_params, t, Xst_Is, label, rng, X=X, method="calc_b"
         )
         b_eval_v = jax.lax.stop_gradient(b_eval_v)
-        b_eval_div = jax.lax.stop_gradient(b_eval_div)
+        b_eval_div = jax.lax.stop_gradient(b_eval_div) / 10000.0
     elif stopgrad_type == "none":
         b_eval_v, b_eval_div = _hutchinson_divergence_with_phi(
             params, t, Xst_Is, label, rng, X=X, method="calc_b"
