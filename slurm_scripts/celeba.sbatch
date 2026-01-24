@@ -7,7 +7,6 @@
 #SBATCH --time=02-00:00
 #SBATCH --gres=gpu:4
 #SBATCH --mem=128GB
-#SBATCH --exclude=babel-v9-28,babel-x5-24,babel-w5-16,babel-x5-32,babel-w5-32
 #SBATCH --output=/home/xinyueai/Experiments/flow-maps/log/celeba_%A_%a.out
 #SBATCH --error=/home/xinyueai/Experiments/flow-maps/log/celeba_%A_%a.err
 
@@ -15,7 +14,7 @@
 ## Configuration
 PY_DIR=/home/xinyueai/Experiments/flow-maps/py
 CONFIG_PATH="configs.celeba64"
-OUTPUT_FOLDER="/data/user_data/xinyueai/flow-maps/celeba-lsd"
+OUTPUT_FOLDER="/data/user_data/xinyueai/flow-maps/celeba-lsd-10000-0.5"
 DATASET_LOCATION="/home/xinyueai/Experiments/data"
 
 # Single experiment: LSD

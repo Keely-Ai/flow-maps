@@ -68,7 +68,22 @@ def _hutchinson_divergence_with_phi(
         return tuple(range(x_in.ndim))
 
     div_axes = _div_axes(x, label)
-    div_hat = jnp.sum(vjp_fn(eps)[0] * eps, axis=div_axes)
+    vjp_eps = vjp_fn(eps)[0]
+    div_hat = jnp.sum(vjp_eps * eps, axis=div_axes)
+    # Debug prints for Hutchinson estimator sanity checks.
+    # jax.debug.print(
+    #     "hutchinson: t={t} x.shape={xs} eps.shape={es} div_axes={axes}",
+    #     t=t,
+    #     xs=x.shape,
+    #     es=eps.shape,
+    #     axes=div_axes,
+    # )
+    # jax.debug.print(
+    #     "hutchinson: vjp_eps.shape={vs} div_hat.shape={ds} div_hat.mean={dm}",
+    #     vs=vjp_eps.shape,
+    #     ds=div_hat.shape,
+    #     dm=jnp.mean(div_hat),
+    # )
     return phi, div_hat
 
 
@@ -106,7 +121,8 @@ def diagonal_term(
         teacher_params, t, It, label, rng, X=X, method="calc_b"
     )
     bt_teacher = jax.lax.stop_gradient(bt_teacher)
-    div_hat = jax.lax.stop_gradient(div_hat)
+    div_hat = jax.lax.stop_gradient(div_hat) / 50000.0
+    # jax.debug.print("t={}, div_hat={}", t, div_hat)
     if isinstance(bt_rslt, tuple):
         bt, div_tt = bt_rslt
     else:
@@ -117,11 +133,25 @@ def diagonal_term(
     base_velocity_loss = jnp.sum((bt - bt_teacher) ** 2)
     div_loss = jnp.array(0.0, dtype=base_velocity_loss.dtype)
     if div_tt is not None:
-        div_loss = jnp.sum((div_tt - div_hat) ** 2) * 0.1
+        # jax.debug.print(
+        #     "diag: bt.shape={bts} div_tt.shape={dts} div_hat.shape={dhs}",
+        #     bts=bt.shape,
+        #     dts=div_tt.shape,
+        #     dhs=div_hat.shape,
+        # )
+        # jax.debug.print(
+        #     "diag: div_tt.mean={dtm} div_hat.mean={dhm}",
+        #     dtm=jnp.mean(div_tt),
+        #     dhm=jnp.mean(div_hat),
+        # )
+        div_loss = jnp.sum((div_tt - div_hat) ** 2)
         # velocity_loss = velocity_loss + jnp.sum((div_tt - div_hat) ** 2) * 0.1
         # pass
         velocity_loss = base_velocity_loss + div_loss
     else:
+        jax.debug.print(
+            "warning: diag div head missing (div_tt is None)",
+        )
         velocity_loss = base_velocity_loss
 
     # Diagonal uses s=t
@@ -130,6 +160,98 @@ def diagonal_term(
     metrics = {
         "diag/velocity_loss": jax.lax.stop_gradient(base_velocity_loss),
         "diag/div_loss": jax.lax.stop_gradient(div_loss),
+    }
+    return loss_value, metrics
+
+
+
+def lsd_term(
+    params: Parameters,
+    teacher_params: Parameters,
+    x0: jnp.ndarray,
+    x1: jnp.ndarray,
+    label: jnp.ndarray,
+    s: float,
+    t: float,
+    rng: jnp.ndarray,
+    *,
+    interp: interpolant.Interpolant,
+    X: flow_map.FlowMap,
+    stopgrad_type: str,
+) -> Tuple[jnp.ndarray, Dict[str, jnp.ndarray]]:
+    """Compute the LSD term of the loss."""
+    Is = interp.calc_It(s, x0, x1)
+
+    def _split_output(value):
+        if isinstance(value, tuple):
+            return value[0], value[1]
+        return value, None
+
+    # Compute the distillation loss
+    Xst_Is, dt_Xst = X.apply(
+        params,
+        s,
+        t,
+        Is,
+        label,
+        train=False,
+        method="partial_t",
+        rngs=rng,
+        return_div=True,
+    )
+    Xst_Is, D_st = _split_output(Xst_Is)
+    dt_Xst, dt_Dst = _split_output(dt_Xst)
+    dt_Dst = jax.lax.stop_gradient(dt_Dst)
+
+    if stopgrad_type == "convex":
+        Xst_Is = jax.lax.stop_gradient(Xst_Is)
+        b_eval_v, b_eval_div = _hutchinson_divergence_with_phi(
+            teacher_params, t, Xst_Is, label, rng, X=X, method="calc_b"
+        )
+        b_eval_v = jax.lax.stop_gradient(b_eval_v)
+        b_eval_div = jax.lax.stop_gradient(b_eval_div)
+    elif stopgrad_type == "none":
+        b_eval_v, b_eval_div = _hutchinson_divergence_with_phi(
+            params, t, Xst_Is, label, rng, X=X, method="calc_b"
+        )
+    else:
+        raise ValueError(f"Invalid stopgrad_type: {stopgrad_type}")
+
+    weight_st = X.apply(params, s, t, method="calc_weight")
+    error = b_eval_v - dt_Xst
+    if D_st is not None:
+        A_dot = D_st + (t - s) * jax.lax.stop_gradient(dt_Dst)
+        error_div = A_dot - b_eval_div
+        # Debug prints for LSD term divergence alignment.
+        # jax.debug.print(
+        #     "lsd: Xst_Is.shape={xs} dt_Xst.shape={dts} D_st.shape={ds} dt_Dst.shape={dds}",
+        #     xs=Xst_Is.shape,
+        #     dts=dt_Xst.shape,
+        #     ds=D_st.shape,
+        #     dds=dt_Dst.shape,
+        # )
+        # jax.debug.print(
+        #     "lsd: b_eval_div.shape={bds} A_dot.shape={ads}",
+        #     bds=b_eval_div.shape,
+        #     ads=A_dot.shape,
+        # )
+        # jax.debug.print(
+        #     "lsd: b_eval_div.mean={bdm} A_dot.mean={adm}",
+        #     bdm=jnp.mean(b_eval_div),
+        #     adm=jnp.mean(A_dot),
+        # )
+        lsd_div_loss = jnp.sum(error_div**2)
+    else:
+        jax.debug.print(
+            "warning: lsd div head missing (D_st is None)",
+        )
+        lsd_div_loss = jnp.array(0.0, dtype=error.dtype)
+    lsd_v_loss = jnp.sum(error**2)
+    lsd_loss = lsd_v_loss + lsd_div_loss
+    loss_value = jnp.exp(-weight_st) * lsd_loss + weight_st
+    metrics = {
+        "lsd/lsd_v_loss": jax.lax.stop_gradient(lsd_v_loss),
+        "lsd/lsd_div_loss": jax.lax.stop_gradient(lsd_div_loss),
     }
     return loss_value, metrics
 
@@ -241,91 +363,6 @@ def psd_term(
 
     weight_st = X.apply(params, s, t, method="calc_weight")
     return jnp.exp(-weight_st) * psd_loss + weight_st
-
-
-def lsd_term(
-    params: Parameters,
-    teacher_params: Parameters,
-    x0: jnp.ndarray,
-    x1: jnp.ndarray,
-    label: jnp.ndarray,
-    s: float,
-    t: float,
-    rng: jnp.ndarray,
-    *,
-    interp: interpolant.Interpolant,
-    X: flow_map.FlowMap,
-    stopgrad_type: str,
-) -> Tuple[jnp.ndarray, Dict[str, jnp.ndarray]]:
-    """Compute the LSD term of the loss."""
-    Is = interp.calc_It(s, x0, x1)
-
-    def _split_output(value):
-        if isinstance(value, tuple):
-            return value[0], value[1]
-        return value, None
-
-    # Compute the distillation loss
-    Xst_Is, dt_Xst = X.apply(
-        params,
-        s,
-        t,
-        Is,
-        label,
-        train=False,
-        method="partial_t",
-        rngs=rng,
-        return_div=True,
-    )
-    Xst_Is, D_st = _split_output(Xst_Is)
-    dt_Xst, dt_Dst = _split_output(dt_Xst)
-
-    if stopgrad_type == "convex":
-        Xst_Is = jax.lax.stop_gradient(Xst_Is)
-        b_eval = jax.lax.stop_gradient(
-            X.apply(
-                teacher_params,
-                t,
-                Xst_Is,
-                label,
-                train=False,
-                method="calc_b",
-                rngs=rng,
-                return_div=True,
-            )
-        )
-    elif stopgrad_type == "none":
-        b_eval = X.apply(
-            params,
-            t,
-            Xst_Is,
-            label,
-            train=False,
-            method="calc_b",
-            rngs=rng,
-            return_div=True,
-        )
-    else:
-        raise ValueError(f"Invalid stopgrad_type: {stopgrad_type}")
-
-    b_eval, b_eval_div = _split_output(b_eval)
-
-    weight_st = X.apply(params, s, t, method="calc_weight")
-    error = b_eval - dt_Xst
-    if D_st is not None:
-        A_dot = D_st + (t - s) * dt_Dst
-        error_div = A_dot - b_eval_div
-        lsd_div_loss = jnp.sum(error_div**2) * 0.1
-    else:
-        lsd_div_loss = jnp.array(0.0, dtype=error.dtype)
-    lsd_v_loss = jnp.sum(error**2)
-    lsd_loss = lsd_v_loss + lsd_div_loss
-    loss_value = jnp.exp(-weight_st) * lsd_loss + weight_st
-    metrics = {
-        "lsd/lsd_v_loss": jax.lax.stop_gradient(lsd_v_loss),
-        "lsd/lsd_div_loss": jax.lax.stop_gradient(lsd_div_loss),
-    }
-    return loss_value, metrics
 
 
 def esd_term(

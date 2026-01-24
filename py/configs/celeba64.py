@@ -39,6 +39,8 @@ def get_config(
     config.training.seed = 42
     config.training.ema_facs = [0.9999]
     config.training.ndevices = jax.device_count()
+    config.training.diag_teacher_source = "external"
+    config.training.offdiag_teacher_source = "self"
 
     # problem config
     config.problem = ml_collections.ConfigDict()
@@ -55,8 +57,8 @@ def get_config(
     # optimization config
     config.optimization = ml_collections.ConfigDict()
     config.optimization.bs = 256
-    config.optimization.diag_fraction = 0.4
-    config.optimization.learning_rate = 1e-2  # Initial learning rate
+    config.optimization.diag_fraction = 0.75
+    config.optimization.learning_rate = 1e-4  # Initial learning rate
     config.optimization.clip = 1.0
     config.optimization.total_samples = 204_800_000
     config.optimization.total_steps = int(
@@ -71,6 +73,10 @@ def get_config(
     config.logging.visual_freq = 1000
     config.logging.save_freq = 5000  # Save every 5k steps
     config.logging.wandb_project = "self-distill-flow-maps"
+    config.logging.bpd_freq = 1000
+    config.logging.bpd_n_steps = [1, 2, 4, 8]
+    config.logging.bpd_batch_size = 64
+    config.logging.bpd_ema_factor = 0.9999
 
     # Create systematic name for the experiment
     method_str = f"{loss_type}_{psd_type}" if psd_type else loss_type
@@ -81,7 +87,7 @@ def get_config(
     config.logging.output_name = config.logging.wandb_name
 
     # FID computation settings
-    config.logging.fid_freq = 5000  # Compute FID every 10k steps
+    config.logging.fid_freq = 1000  # Compute FID every 10k steps
     config.logging.fid_stats_path = f"{dataset_location}/celeb_a/celeba_stats.npz"
     config.logging.fid_n_samples = 10000
     config.logging.fid_batch_size = 256
@@ -98,11 +104,12 @@ def get_config(
     config.network.input_dims = config.problem.image_dims
     config.network.label_dim = 0  # No class conditioning for CelebA
     config.network.use_cfg = False
-    config.network.reset_optimizer = False
+    config.network.reset_optimizer = True
     config.network.logvar_channels = 128
     config.network.use_bfloat16 = True
     config.network.use_weight = True
     config.network.rescale = 0.5
+    config.network.init_from_ema_factor = 0.9999
 
     # CelebA-specific UNet architecture
     config.network.unet_kwargs = {

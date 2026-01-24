@@ -77,7 +77,6 @@ def _inverse_logp_euler(
     x_t: jnp.ndarray,
     n_steps: int,
     rescale: float,
-    rng_key: jnp.ndarray,
 ) -> jnp.ndarray:
     dt = -1.0 / n_steps
     t_curr = jnp.ones((x_t.shape[0],), dtype=jnp.float32)
@@ -85,40 +84,27 @@ def _inverse_logp_euler(
     delta_logp = jnp.zeros((x_t.shape[0],), dtype=jnp.float32)
 
     def body(_, state):
-        t_curr, x, delta_logp, rng_key = state
+        t_curr, x, delta_logp = state
         t_next = t_curr + dt
-        b = apply_fn(
+        b, div = apply_fn(
             params,
             t_curr,
+            t_next,
             x,
             None,
             train=False,
-            method="calc_b",
+            method="calc_phi",
+            return_div=True,
         )
-        rng_key, eps_key = jax.random.split(rng_key)
-        eps = jax.random.normal(eps_key, shape=x.shape)
-        _, vjp_fn = jax.vjp(
-            lambda x_in: apply_fn(
-                params,
-                t_curr,
-                x_in,
-                None,
-                train=False,
-                method="calc_b",
-            ),
-            x,
-        )
-        div = jnp.sum(vjp_fn(eps)[0] * eps, axis=tuple(range(1, x.ndim)))
-        jax.debug.print("t={}, div_mean={}", t_curr[0], div.mean())
         x = x + dt * b
         delta_logp = delta_logp - dt * div
-        return t_next, x, delta_logp, rng_key
+        return t_next, x, delta_logp
 
-    t_curr, x0, delta_logp, _ = jax.lax.fori_loop(
-        0, n_steps, body, (t_curr, x, delta_logp, rng_key)
+    t_curr, x0, delta_logp = jax.lax.fori_loop(
+        0, n_steps, body, (t_curr, x, delta_logp)
     )
     logp0 = _base_log_prob(x0, rescale)
-    jax.debug.print("delta_logp={}, logp0={}", delta_logp, logp0)
+    # jax.debug.print("rescale={}",rescale)
     return logp0 - delta_logp
 
 
@@ -165,8 +151,8 @@ def parse_args():
         type=str,
         default="/data/user_data/xinyueai/flow-maps/celeba-lsd/celeba_paper_lsd_64.pkl",
     )
-    parser.add_argument("--batch_size", type=int, default=32)
-    parser.add_argument("--n_steps", type=int, default=1024)
+    parser.add_argument("--batch_size", type=int, default=64)
+    parser.add_argument("--n_steps", type=int, default=8)
     parser.add_argument("--seed", type=int, default=2)
     parser.add_argument(
         "--no_dequantize",
@@ -201,14 +187,12 @@ def main():
 
     for batch in data_iter:
         x = jnp.asarray(batch)
-        prng_key, hutch_key = jax.random.split(prng_key)
         logp_z = _inverse_logp_euler(
             apply_fn,
             params,
             x,
             args.n_steps,
             cfg.network.rescale,
-            hutch_key,
         )
         bpd, total_logp = _compute_bpd(logp_z, d, dequantize=dequantize)
         bpd_sum += float(jnp.sum(bpd))

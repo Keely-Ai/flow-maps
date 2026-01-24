@@ -46,6 +46,8 @@ def get_params_for_sampling(
         config_param = "visual_ema_factor"
     elif param_type == "fid":
         config_param = "fid_ema_factor"
+    elif param_type == "bpd":
+        config_param = "bpd_ema_factor"
     else:
         raise ValueError(f"Unknown param_type: {param_type}")
 
@@ -67,8 +69,8 @@ def get_params_for_sampling(
         # Use instantaneous parameters (default)
         params = train_state.params
 
-    # Visual uses unreplicated params, FID uses replicated params for pmap
-    if param_type == "visual":
+    # Visual/BPD uses unreplicated params, FID uses replicated params for pmap
+    if param_type in ("visual", "bpd"):
         return dist_utils.safe_unreplicate(cfg, params)
     else:
         return params
@@ -343,6 +345,27 @@ def log_metrics(
                 metrics[f"fid_{n_steps}_steps"] = fid_score
         except Exception as e:
             print(f"Warning: FID computation failed: {e}")
+
+    # Compute CelebA BPD on a single batch if enabled
+    if (
+        cfg.problem.target == "celeb_a"
+        and hasattr(cfg.logging, "bpd_freq")
+        and cfg.logging.bpd_freq > 0
+        and (step % cfg.logging.bpd_freq) == 0
+        and step > 0
+    ):
+        try:
+            steps_config = getattr(cfg.logging, "bpd_n_steps", [1, 2, 4, 8])
+            if isinstance(steps_config, (list, tuple)):
+                n_steps_list = tuple(steps_config)
+            else:
+                n_steps_list = (int(steps_config),)
+            bpd_metrics = compute_celeba_bpd_on_batch(
+                cfg, train_state, loss_fn_args, n_steps_list
+            )
+            metrics.update(bpd_metrics)
+        except Exception as e:
+            print(f"Warning: BPD computation failed: {e}")
 
     wandb.log(metrics)
 
@@ -645,6 +668,17 @@ def _base_log_prob(cfg: config_dict.ConfigDict, x: jnp.ndarray) -> jnp.ndarray:
     return -0.5 * quad - log_norm
 
 
+def _base_log_prob_image(x: jnp.ndarray, rescale: float) -> jnp.ndarray:
+    """Log prob of N(0, diag(rescale^2)) for image-shaped tensors."""
+    sigma = jnp.asarray(rescale, dtype=x.dtype)
+    dims = tuple(range(1, x.ndim))
+    quad = jnp.sum((x / sigma) ** 2, axis=dims)
+    d = x[0].size
+    log_det = d * jnp.log(sigma**2)
+    log_norm = 0.5 * (d * jnp.log(2 * jnp.pi) + log_det)
+    return -0.5 * quad - log_norm
+
+
 def _sample_model_nsteps_with_logp(
     apply_fn: Callable,
     params: Dict,
@@ -797,6 +831,86 @@ def _inverse_logp_points_with_divhead(
     logp0 = _base_log_prob(cfg, x)
     logp1 = logp0 - delta_logp
     return np.asarray(x), np.asarray(logp1)
+
+
+@functools.partial(jax.jit, static_argnums=(0, 3))
+def _inverse_logp_euler_divhead(
+    apply_fn: Callable,
+    params: Dict,
+    x_t: jnp.ndarray,
+    n_steps: int,
+    rescale: float,
+) -> jnp.ndarray:
+    dt = -1.0 / n_steps
+    t_curr = jnp.ones((x_t.shape[0],), dtype=jnp.float32)
+    x = x_t
+    delta_logp = jnp.zeros((x_t.shape[0],), dtype=jnp.float32)
+
+    def body(_, state):
+        t_curr, x, delta_logp = state
+        t_next = t_curr + dt
+        phi, div = apply_fn(
+            params,
+            t_curr,
+            t_next,
+            x,
+            None,
+            train=False,
+            method="calc_phi",
+            return_div=True,
+        )
+        x = x + dt * phi
+        delta_logp = delta_logp - dt * div * 50000.0
+        jax.debug.print("t={}, div_mean={}", t_curr[0], div.mean())
+        return t_next, x, delta_logp
+
+    t_curr, x0, delta_logp = jax.lax.fori_loop(
+        0, n_steps, body, (t_curr, x, delta_logp)
+    )
+    logp0 = _base_log_prob_image(x0, rescale)
+    return logp0 - delta_logp
+
+
+def _compute_bpd_from_logp(
+    logp_z: jnp.ndarray, d: int, *, dequantize: bool
+) -> Tuple[jnp.ndarray, jnp.ndarray]:
+    log2_const = jnp.log(2.0)
+    log_det_transform = d * jnp.log(2.0)
+    total_logp = logp_z + log_det_transform
+    if dequantize:
+        total_logp = total_logp - d * jnp.log(256.0)
+    bpd = -(total_logp / (d * log2_const))
+    return bpd, total_logp
+
+
+def compute_celeba_bpd_on_batch(
+    cfg: config_dict.ConfigDict,
+    train_state: state_utils.EMATrainState,
+    loss_fn_args: Tuple,
+    n_steps_list: Tuple[int, ...],
+) -> Dict[str, float]:
+    """Compute per-step BPD on a single CelebA batch using div head."""
+    # loss_fn_args = (teacher_diag, teacher_offdiag, x0, x1, label, s, t, u, h, dropout)
+    x1batch = loss_fn_args[3]
+    x1batch = dist_utils.unreplicate_batch(cfg, x1batch)
+    batch_size = getattr(cfg.logging, "bpd_batch_size", None)
+    if batch_size is not None:
+        x1batch = x1batch[:batch_size]
+
+    params_for_bpd = get_params_for_sampling(cfg, train_state, param_type="bpd")
+    d = int(np.prod(cfg.problem.image_dims))
+    metrics = {}
+    for n_steps in n_steps_list:
+        logp_z = _inverse_logp_euler_divhead(
+            train_state.apply_fn,
+            params_for_bpd,
+            x1batch,
+            n_steps,
+            cfg.network.rescale,
+        )
+        bpd, _ = _compute_bpd_from_logp(logp_z, d, dequantize=True)
+        metrics[f"bpd_{n_steps}_steps"] = float(jnp.mean(bpd))
+    return metrics
 
 
 def _clip_heatmaps(heatmaps):

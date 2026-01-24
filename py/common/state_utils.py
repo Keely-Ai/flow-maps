@@ -198,6 +198,18 @@ def setup_training_state(
         train_state = load_checkpoint(cfg, train_state)
         print("Loaded training state checkpoint.")
 
+        init_from_ema_fac = getattr(cfg.network, "init_from_ema_factor", None)
+        if init_from_ema_fac is not None:
+            ema_params = train_state.ema_params.get(init_from_ema_fac, None)
+            if ema_params is None:
+                print(
+                    f"Warning: EMA factor {init_from_ema_fac} not found for init. "
+                    "Keeping checkpoint params."
+                )
+            else:
+                print(f"Initializing params from EMA {init_from_ema_fac}.")
+                train_state = train_state.replace(params=ema_params)
+
         if cfg.network.reset_optimizer:
             print("Resetting optimizer state.")
             train_state = train_state.replace(
